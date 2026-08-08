@@ -1,7 +1,12 @@
 # Envío masivo de WhatsApp
 
+![Code Repair Tech](public/assets/code-repair-tech-header.png)
+
 Proyecto standalone (separado de GigantYA) para mandar una plantilla de
 WhatsApp Business aprobada en Meta a una lista propia de contactos.
+
+Desarrollado y mantenido por **Code Repair Tech Inc.**, el mismo equipo
+detrás de GigantYA.
 
 ## Qué hace
 

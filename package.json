@@ -2,6 +2,7 @@
   "name": "whatsapp-broadcast",
   "version": "1.0.0",
   "description": "Envío masivo de plantillas de WhatsApp (Meta Cloud API) a una lista de contactos propia. Proyecto standalone, separado de GigantYA.",
+  "author": "Code Repair Tech Inc.",
   "type": "module",
   "main": "server.js",
   "scripts": {

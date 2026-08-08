@@ -4,12 +4,20 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#075e54" />
-  <title>Envío masivo de WhatsApp</title>
+  <meta name="description" content="Envío masivo de plantillas de WhatsApp Business, un producto de Code Repair Tech." />
+  <title>Mensajes Masivos · Code Repair Tech</title>
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="icon" href="/assets/favicon-32.png" type="image/png" sizes="32x32" />
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
+      <span class="crt-mark" aria-label="Code Repair Tech">
+        <img src="/assets/code-repair-tech-header.png" alt="Code Repair Tech" />
+      </span>
+      <span class="brand-divider" aria-hidden="true"></span>
       <span class="brand-icon" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 11.5a8.5 8.5 0 1 1 3.8 7.1L3 20l1.4-3.8a8.4 8.4 0 0 1-1.4-4.7Z" />
@@ -182,6 +190,16 @@
     </section>
   </main>
 
+  <footer class="app-footer">
+    <img src="/assets/code-repair-tech-lockup.png" alt="Code Repair Tech Inc. — Soluciones tecnológicas, resultados reales" class="footer-logo" />
+    <p class="footer-meta">
+      Mensajes Masivos es un producto de <strong>Code Repair Tech Inc.</strong>,
+      el mismo equipo detrás de <strong>GigantYA</strong>.
+    </p>
+    <p class="footer-copy">© <span id="footerYear"></span> Code Repair Tech Inc.</p>
+  </footer>
+
+  <script>document.getElementById('footerYear').textContent = new Date().getFullYear();</script>
   <script src="/app.js"></script>
 </body>
 </html>
