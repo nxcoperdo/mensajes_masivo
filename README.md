@@ -59,3 +59,50 @@ inicio de comentario en valores sin comillas.
 Esto alcanza para uso interno con pocos usuarios, pero no reemplaza
 HTTPS: en el VPS, servite detrás de Nginx con Let's Encrypt para que
 las credenciales no viajen en texto plano.
+
+## Prospección de leads (B2B)
+
+Módulo independiente para conseguir prospectos: busca negocios por
+rubro y ciudad (ej. "restaurantes" en "Neiva Huila") y guarda los que
+tengan teléfono, con su link de WhatsApp ya armado, para que los
+contactes manualmente y les ofrezcas el servicio. **Estos leads son
+100% independientes de la tabla de `contactos`/`campanas` — nunca se
+usan para enviar mensajes automáticamente ni se mezclan con esa lista.**
+
+### Endpoints
+
+- `POST /api/leads/buscar` — body `{ "query": "restaurantes", "ciudad": "Neiva Huila" }`.
+  Busca negocios, descarta los que no tienen teléfono, y guarda los
+  nuevos (evita duplicados por teléfono). Responde:
+  ```json
+  { "proveedor": "osm", "total_encontrados": 12, "nuevos": 9, "duplicados": 3 }
+  ```
+- `GET /api/leads` — lista los leads guardados. Filtro opcional
+  `?estado=nuevo` (o `contactado`, `cliente`, o el valor que uses).
+- `PATCH /api/leads/:id` — body `{ "estado": "contactado" }` para
+  actualizar el estado a mano a medida que los vas gestionando (ej:
+  `nuevo` → `contactado` → `cliente`).
+
+### Qué proveedor de búsqueda queda activo
+
+- **Con `GOOGLE_PLACES_API_KEY` configurada en `.env`** (recomendado):
+  usa Google Places (Text Search + Place Details) — resultados más
+  completos y confiables. Requiere una cuenta de Google Cloud con
+  facturación habilitada (tiene free tier mensual, pero la key no
+  funciona sin tarjeta asociada) y tener la "Places API" habilitada en
+  el proyecto de Google Cloud.
+- **Sin key configurada** (comportamiento por defecto de este repo
+  ahora mismo): cae automáticamente a **Nominatim + Overpass**
+  (OpenStreetMap), gratis y sin necesidad de registrarte. La cobertura
+  de negocios depende de qué tan completo esté el mapeo de OSM en esa
+  zona — puede traer menos resultados que Google en ciudades chicas.
+
+Para pasar de uno a otro no hay que tocar código: solo completar (o
+vaciar) `GOOGLE_PLACES_API_KEY` en `.env` y reiniciar la app.
+
+Variables relevantes en `.env.example`: `GOOGLE_PLACES_API_KEY`,
+`NOMINATIM_USER_AGENT` (identifica tu app ante Nominatim, requerido
+por su política de uso), `LEADS_RADIO_METROS` (radio de búsqueda
+alrededor del centro de la ciudad, default 5km) y
+`LEADS_MAX_RESULTADOS` (tope de resultados por búsqueda, default 20 —
+también limita cuántos Place Details se piden a Google por búsqueda).

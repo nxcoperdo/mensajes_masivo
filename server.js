@@ -8,6 +8,7 @@ import { db } from './db.js';
 import { parseCsv } from './csv.js';
 import { parseExcel } from './excel.js';
 import { sendTemplate, normalizePhone, isWhatsAppConfigured } from './whatsapp.js';
+import { buscarNegocios } from './leads.js';
 
 dotenv.config();
 
@@ -288,6 +289,79 @@ async function procesarCampana({ campanaId, template_nombre, idioma, parametrosD
 
   db.prepare(`UPDATE campanas SET estado = 'completada' WHERE id = ?`).run(campanaId);
 }
+
+// ==================== LEADS (PROSPECCIÓN B2B) ====================
+
+/**
+ * Busca negocios de una categoría en una ciudad colombiana (Google
+ * Places si hay GOOGLE_PLACES_API_KEY en .env, si no cae a
+ * Nominatim+Overpass gratis — ver leads.js) y guarda los que tengan
+ * teléfono. Hace dedup por teléfono: si ya existía un lead con ese
+ * número, no lo duplica (ON CONFLICT DO NOTHING).
+ *
+ * Esta tabla es independiente de contactos/campanas/envios — estos
+ * leads NUNCA se usan para enviar mensajes automáticamente, son solo
+ * para prospección manual.
+ *
+ * Body: { query: string, ciudad: string }
+ */
+app.post('/api/leads/buscar', async (req, res) => {
+  const { query, ciudad } = req.body || {};
+  if (!query || !String(query).trim()) {
+    return res.status(400).json({ error: 'Falta el término de búsqueda (query)' });
+  }
+  if (!ciudad || !String(ciudad).trim()) {
+    return res.status(400).json({ error: 'Falta la ciudad' });
+  }
+
+  const busqueda = await buscarNegocios({ query: query.trim(), ciudad: ciudad.trim() });
+  if (!busqueda.ok) {
+    return res.status(502).json({ error: busqueda.error });
+  }
+
+  const insert = db.prepare(`
+    INSERT INTO leads_prospectos (nombre, rubro, direccion, telefono, link_whatsapp, sitio_web)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(telefono) DO NOTHING
+  `);
+
+  let nuevos = 0;
+  let duplicados = 0;
+  for (const r of busqueda.resultados) {
+    const result = insert.run(r.nombre, r.rubro, r.direccion, r.telefono, r.link_whatsapp, r.sitio_web);
+    if (result.changes > 0) nuevos++;
+    else duplicados++;
+  }
+
+  res.json({
+    proveedor: busqueda.proveedor,
+    total_encontrados: busqueda.resultados.length,
+    nuevos,
+    duplicados,
+  });
+});
+
+app.get('/api/leads', (req, res) => {
+  const { estado } = req.query;
+  const leads = estado
+    ? db.prepare('SELECT * FROM leads_prospectos WHERE estado = ? ORDER BY fecha_encontrado DESC').all(estado)
+    : db.prepare('SELECT * FROM leads_prospectos ORDER BY fecha_encontrado DESC').all();
+  res.json({ leads });
+});
+
+app.patch('/api/leads/:id', (req, res) => {
+  const { estado } = req.body || {};
+  if (!estado || !String(estado).trim()) {
+    return res.status(400).json({ error: 'Falta el estado' });
+  }
+  const result = db
+    .prepare('UPDATE leads_prospectos SET estado = ? WHERE id = ?')
+    .run(estado.trim(), req.params.id);
+  if (result.changes === 0) {
+    return res.status(404).json({ error: 'Lead no encontrado' });
+  }
+  res.json({ ok: true });
+});
 
 const PORT = process.env.PORT || 4100;
 app.listen(PORT, () => {

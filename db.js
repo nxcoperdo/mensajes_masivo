@@ -41,6 +41,20 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_envios_campana ON envios(campana_id);
+
+  CREATE TABLE IF NOT EXISTS leads_prospectos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT NOT NULL,
+    rubro TEXT,
+    direccion TEXT,
+    telefono TEXT NOT NULL UNIQUE,
+    link_whatsapp TEXT NOT NULL,
+    sitio_web TEXT,
+    estado TEXT NOT NULL DEFAULT 'nuevo',
+    fecha_encontrado TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_leads_estado ON leads_prospectos(estado);
 `);
 
 export default db;
