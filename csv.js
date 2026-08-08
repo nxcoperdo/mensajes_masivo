@@ -7,9 +7,12 @@
  * Devuelve un array de objetos usando la primera fila como headers,
  * con las claves en minúscula y sin espacios/acentos raros.
  */
+const BOM_CODE = 0xfeff;
+
 export function normalizeHeader(h) {
-  return String(h)
-    .replace(/^﻿/, '') // quita el BOM que agrega Excel al exportar CSV en UTF-8
+  let str = String(h);
+  if (str.charCodeAt(0) === BOM_CODE) str = str.slice(1); // Excel agrega un BOM al exportar CSV en UTF-8
+  return str
     .trim()
     .toLowerCase()
     .normalize('NFD')
