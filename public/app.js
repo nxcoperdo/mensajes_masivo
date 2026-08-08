@@ -3,6 +3,34 @@ let contactos = [];
 const seleccionados = new Set();
 let parametros = []; // [{ tipo: 'fijo'|'nombre', valor: '' }]
 
+// ==================== TEMA (claro/oscuro) ====================
+// Sigue prefers-color-scheme por defecto; el botón permite forzar un
+// modo y lo recuerda en localStorage.
+
+const THEME_KEY = 'wa-broadcast-theme';
+
+function aplicarTema(theme) {
+  if (theme === 'light' || theme === 'dark') {
+    document.documentElement.setAttribute('data-theme', theme);
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+  }
+}
+
+function temaActualEfectivo() {
+  const guardado = localStorage.getItem(THEME_KEY);
+  if (guardado === 'light' || guardado === 'dark') return guardado;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+aplicarTema(localStorage.getItem(THEME_KEY));
+
+document.getElementById('btnTheme').addEventListener('click', () => {
+  const siguiente = temaActualEfectivo() === 'dark' ? 'light' : 'dark';
+  localStorage.setItem(THEME_KEY, siguiente);
+  aplicarTema(siguiente);
+});
+
 // ==================== TABS ====================
 
 document.querySelectorAll('.tab-btn').forEach((btn) => {
@@ -49,9 +77,28 @@ async function cargarContactos() {
   renderContactos();
 }
 
+const ICONO_ELIMINAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6" /></svg>';
+const ICONO_VER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z" /><circle cx="12" cy="12" r="3" /></svg>';
+const ICONO_CONTACTOS_VACIO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /></svg>';
+
 function renderContactos() {
   const tbody = document.getElementById('tablaContactos');
   tbody.innerHTML = '';
+
+  if (contactos.length === 0) {
+    tbody.innerHTML = `
+      <tr><td colspan="4">
+        <div class="empty-state">
+          ${ICONO_CONTACTOS_VACIO}
+          <div>Todavía no cargaste contactos. Importá un CSV/Excel o agregá uno manual.</div>
+        </div>
+      </td></tr>
+    `;
+    document.getElementById('totalContactos').textContent = 0;
+    actualizarContadorSeleccion();
+    return;
+  }
+
   contactos.forEach((c) => {
     const tr = document.createElement('tr');
     const checked = seleccionados.has(c.id) ? 'checked' : '';
@@ -59,7 +106,7 @@ function renderContactos() {
       <td><input type="checkbox" data-id="${c.id}" ${checked} /></td>
       <td>${c.telefono}</td>
       <td>${c.nombre || '<span class="muted">(sin nombre)</span>'}</td>
-      <td><button class="btn btn-sm btn-outline" data-del="${c.id}">Eliminar</button></td>
+      <td><button class="btn btn-sm btn-outline" data-del="${c.id}">${ICONO_ELIMINAR} Eliminar</button></td>
     `;
     tbody.appendChild(tr);
   });
@@ -126,8 +173,11 @@ document.getElementById('formImportar').addEventListener('submit', async (e) => 
   formData.append('archivo', archivo);
 
   const box = document.getElementById('importarResultado');
+  const btn = e.target.querySelector('button[type="submit"]');
   box.classList.remove('hidden', 'error', 'ok');
   box.textContent = 'Importando…';
+  btn.disabled = true;
+  btn.classList.add('is-loading');
 
   try {
     const res = await fetch('/api/contactos/importar', { method: 'POST', body: formData });
@@ -145,6 +195,9 @@ document.getElementById('formImportar').addEventListener('submit', async (e) => 
   } catch (err) {
     box.classList.add('error');
     box.textContent = err.message;
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove('is-loading');
   }
 });
 
@@ -157,7 +210,7 @@ function renderParametros() {
     const row = document.createElement('div');
     row.className = 'param-row';
     row.innerHTML = `
-      <span class="muted">{{${idx + 1}}}</span>
+      <span class="param-index">{{${idx + 1}}}</span>
       <select data-idx="${idx}" class="param-tipo">
         <option value="nombre" ${p.tipo === 'nombre' ? 'selected' : ''}>Nombre del contacto</option>
         <option value="fijo" ${p.tipo === 'fijo' ? 'selected' : ''}>Texto fijo (igual para todos)</option>
@@ -165,7 +218,9 @@ function renderParametros() {
       <input type="text" data-idx="${idx}" class="param-valor" placeholder="Texto fijo…"
         value="${p.tipo === 'fijo' ? (p.valor || '') : ''}"
         ${p.tipo === 'nombre' ? 'disabled' : ''} />
-      <button type="button" class="btn-danger-sm" data-remove="${idx}" title="Quitar">✕</button>
+      <button type="button" class="btn-danger-sm" data-remove="${idx}" title="Quitar" aria-label="Quitar parámetro ${idx + 1}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
+      </button>
     `;
     cont.appendChild(row);
   });
@@ -214,6 +269,7 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
 
   const btn = document.getElementById('btnEnviarCampana');
   btn.disabled = true;
+  btn.classList.add('is-loading');
   box.classList.remove('hidden', 'error', 'ok');
   box.textContent = 'Iniciando envío…';
 
@@ -226,11 +282,13 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Error al crear la campaña');
 
+    btn.classList.remove('is-loading');
     pollProgresoCampana(data.campana_id, data.total, box, btn);
   } catch (err) {
     box.classList.add('error');
     box.textContent = err.message;
     btn.disabled = false;
+    btn.classList.remove('is-loading');
   }
 });
 
@@ -259,6 +317,16 @@ async function cargarCampanas() {
   const data = await res.json();
   const tbody = document.getElementById('tablaCampanas');
   tbody.innerHTML = '';
+
+  if (data.campanas.length === 0) {
+    tbody.innerHTML = `
+      <tr><td colspan="7">
+        <div class="empty-state">Todavía no enviaste ninguna campaña.</div>
+      </td></tr>
+    `;
+    return;
+  }
+
   data.campanas.forEach((c) => {
     const tr = document.createElement('tr');
     const fecha = new Date(c.creado_en).toLocaleString('es-CO');
@@ -269,7 +337,7 @@ async function cargarCampanas() {
       <td><span class="estado-pill estado-${c.estado}">${c.estado}</span></td>
       <td>${c.enviados}</td>
       <td>${c.fallidos}</td>
-      <td><button class="btn btn-sm btn-outline" data-ver="${c.id}">Ver detalle</button></td>
+      <td><button class="btn btn-sm btn-outline" data-ver="${c.id}">${ICONO_VER} Ver detalle</button></td>
     `;
     tbody.appendChild(tr);
   });

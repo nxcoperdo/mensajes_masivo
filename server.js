@@ -6,13 +6,25 @@ import dotenv from 'dotenv';
 import { timingSafeEqual } from 'crypto';
 import { db } from './db.js';
 import { parseCsv } from './csv.js';
+import { parseExcel } from './excel.js';
 import { sendTemplate, normalizePhone, isWhatsAppConfigured } from './whatsapp.js';
 
 dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } });
+const EXTENSIONES_PERMITIDAS = ['.csv', '.xlsx', '.xls'];
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!EXTENSIONES_PERMITIDAS.includes(ext)) {
+      return cb(new Error('Formato no soportado. Usá un archivo .csv, .xlsx o .xls'));
+    }
+    cb(null, true);
+  },
+});
 
 /**
  * Compara dos strings en tiempo constante (evita timing attacks),
@@ -93,50 +105,57 @@ app.delete('/api/contactos/:id', (req, res) => {
 });
 
 /**
- * Importa un CSV con columnas `telefono` (o `phone`/`numero`) y
- * `nombre` (opcional). Hace upsert por teléfono normalizado: si ya
- * existe, actualiza el nombre; si no, lo crea.
+ * Importa un CSV o Excel (.xlsx/.xls) con columnas `telefono` (o
+ * `phone`/`numero`) y `nombre` (opcional). Hace upsert por teléfono
+ * normalizado: si ya existe, actualiza el nombre; si no, lo crea.
  */
-app.post('/api/contactos/importar', upload.single('archivo'), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: 'Falta el archivo CSV' });
-  }
+app.post('/api/contactos/importar', (req, res) => {
+  upload.single('archivo')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message });
 
-  const texto = req.file.buffer.toString('utf-8');
-  const filas = parseCsv(texto);
-  if (filas.length === 0) {
-    return res.status(400).json({ error: 'El CSV está vacío o no se pudo leer' });
-  }
-
-  const upsert = db.prepare(`
-    INSERT INTO contactos (telefono, nombre) VALUES (?, ?)
-    ON CONFLICT(telefono) DO UPDATE SET nombre = COALESCE(excluded.nombre, contactos.nombre)
-  `);
-
-  let importados = 0;
-  const invalidos = [];
-  // `node:sqlite` no trae un helper `.transaction()` como better-sqlite3
-  // — envolvemos a mano con BEGIN/COMMIT (y ROLLBACK si algo explota).
-  db.exec('BEGIN');
-  try {
-    for (const row of filas) {
-      const telefonoRaw = row.telefono || row.phone || row.numero || row.celular || '';
-      const nombreRaw = row.nombre || row.name || '';
-      const normalizado = normalizePhone(telefonoRaw);
-      if (!normalizado) {
-        if (telefonoRaw) invalidos.push(telefonoRaw);
-        continue;
-      }
-      upsert.run(normalizado, nombreRaw || null);
-      importados++;
+    if (!req.file) {
+      return res.status(400).json({ error: 'Falta el archivo' });
     }
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    return res.status(500).json({ error: err.message });
-  }
 
-  res.json({ importados, invalidos, total_filas: filas.length });
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    const filas = ext === '.csv'
+      ? parseCsv(req.file.buffer.toString('utf-8'))
+      : parseExcel(req.file.buffer);
+
+    if (filas.length === 0) {
+      return res.status(400).json({ error: 'El archivo está vacío o no se pudo leer' });
+    }
+
+    const upsert = db.prepare(`
+      INSERT INTO contactos (telefono, nombre) VALUES (?, ?)
+      ON CONFLICT(telefono) DO UPDATE SET nombre = COALESCE(excluded.nombre, contactos.nombre)
+    `);
+
+    let importados = 0;
+    const invalidos = [];
+    // `node:sqlite` no trae un helper `.transaction()` como better-sqlite3
+    // — envolvemos a mano con BEGIN/COMMIT (y ROLLBACK si algo explota).
+    db.exec('BEGIN');
+    try {
+      for (const row of filas) {
+        const telefonoRaw = row.telefono || row.phone || row.numero || row.celular || '';
+        const nombreRaw = row.nombre || row.name || '';
+        const normalizado = normalizePhone(telefonoRaw);
+        if (!normalizado) {
+          if (telefonoRaw) invalidos.push(telefonoRaw);
+          continue;
+        }
+        upsert.run(normalizado, nombreRaw || null);
+        importados++;
+      }
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      return res.status(500).json({ error: err.message });
+    }
+
+    res.json({ importados, invalidos, total_filas: filas.length });
+  });
 });
 
 // ==================== CAMPAÑAS ====================

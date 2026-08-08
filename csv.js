@@ -7,12 +7,29 @@
  * Devuelve un array de objetos usando la primera fila como headers,
  * con las claves en minúscula y sin espacios/acentos raros.
  */
-function normalizeHeader(h) {
-  return h
+export function normalizeHeader(h) {
+  return String(h)
     .trim()
     .toLowerCase()
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, ''); // quita acentos: teléfono -> telefono
+}
+
+/**
+ * Convierte filas crudas (array de arrays, primera fila = headers) en
+ * objetos { header: valor }. Lo comparten el parser de CSV y el de
+ * Excel para no duplicar la lógica de normalización de headers.
+ */
+export function rowsToObjects(rows) {
+  if (rows.length === 0) return [];
+  const headers = rows[0].map(normalizeHeader);
+  return rows.slice(1).map((values) => {
+    const row = {};
+    headers.forEach((h, idx) => {
+      row[h] = values[idx] != null ? String(values[idx]).trim() : '';
+    });
+    return row;
+  });
 }
 
 function parseLine(line) {
@@ -52,16 +69,5 @@ function parseLine(line) {
 export function parseCsv(text) {
   const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
   if (lines.length === 0) return [];
-
-  const headers = parseLine(lines[0]).map(normalizeHeader);
-  const rows = [];
-  for (let i = 1; i < lines.length; i++) {
-    const values = parseLine(lines[i]);
-    const row = {};
-    headers.forEach((h, idx) => {
-      row[h] = values[idx] ?? '';
-    });
-    rows.push(row);
-  }
-  return rows;
+  return rowsToObjects(lines.map(parseLine));
 }
