@@ -56,6 +56,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 3" /></svg>
       Historial
     </button>
+    <button class="tab-btn" data-tab="leads">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
+      Leads
+    </button>
   </nav>
 
   <main>
@@ -184,6 +188,66 @@
               </tr>
             </thead>
             <tbody id="tablaEnvios"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== TAB: LEADS (PROSPECCIÓN B2B) ===================== -->
+    <section id="tab-leads" class="tab-panel">
+      <div class="card">
+        <h2>Buscar negocios</h2>
+        <p class="muted">
+          Busca negocios por rubro y ciudad (ej: <code>restaurantes</code> / <code>Neiva Huila</code>) y guarda
+          los que tengan teléfono, con su link de WhatsApp listo. Estos leads son independientes de tus
+          contactos — nunca se les manda nada automáticamente, son solo para que los contactes vos.
+        </p>
+        <form id="formBuscarLeads" class="inline-form">
+          <div class="field">
+            <label for="leadsQuery" class="sr-only">Rubro / término de búsqueda</label>
+            <input type="text" id="leadsQuery" placeholder="Rubro (ej: restaurantes, concesionarios)" autocomplete="off" required />
+          </div>
+          <div class="field">
+            <label for="leadsCiudad" class="sr-only">Ciudad</label>
+            <input type="text" id="leadsCiudad" placeholder="Ciudad (ej: Neiva Huila)" autocomplete="off" required />
+          </div>
+          <button type="submit" class="btn btn-primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
+            Buscar
+          </button>
+        </form>
+        <div id="leadsBusquedaResultado" class="result-box hidden"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h2>Leads guardados (<span id="totalLeads">0</span>)</h2>
+          <div class="header-actions">
+            <label for="filtroEstadoLeads" class="sr-only">Filtrar por estado</label>
+            <select id="filtroEstadoLeads">
+              <option value="">Todos los estados</option>
+              <option value="nuevo">Nuevo</option>
+              <option value="contactado">Contactado</option>
+              <option value="interesado">Interesado</option>
+              <option value="cliente">Cliente</option>
+              <option value="descartado">Descartado</option>
+            </select>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="tabla">
+            <thead>
+              <tr>
+                <th>Nombre</th>
+                <th>Rubro</th>
+                <th>Dirección</th>
+                <th>Teléfono</th>
+                <th>Sitio web</th>
+                <th>WhatsApp</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody id="tablaLeads"></tbody>
           </table>
         </div>
       </div>

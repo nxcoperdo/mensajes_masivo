@@ -45,6 +45,9 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
     if (btn.dataset.tab === 'historial') {
       cargarCampanas();
     }
+    if (btn.dataset.tab === 'leads') {
+      cargarLeads();
+    }
   });
 });
 
@@ -372,6 +375,104 @@ async function verDetalleCampana(id) {
     tbody.appendChild(tr);
   });
 }
+
+// ==================== LEADS (PROSPECCIÓN B2B) ====================
+
+const ICONO_LEADS_VACIO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>';
+const ESTADOS_LEADS = ['nuevo', 'contactado', 'interesado', 'cliente', 'descartado'];
+
+async function cargarLeads() {
+  const estado = document.getElementById('filtroEstadoLeads').value;
+  const url = estado ? `/api/leads?estado=${encodeURIComponent(estado)}` : '/api/leads';
+  const res = await fetch(url);
+  const data = await res.json();
+  renderLeads(data.leads);
+}
+
+function renderLeads(leads) {
+  const tbody = document.getElementById('tablaLeads');
+  tbody.innerHTML = '';
+  document.getElementById('totalLeads').textContent = leads.length;
+
+  if (leads.length === 0) {
+    tbody.innerHTML = `
+      <tr><td colspan="7">
+        <div class="empty-state">
+          ${ICONO_LEADS_VACIO}
+          <div>Todavía no hay leads. Buscá un rubro y una ciudad arriba.</div>
+        </div>
+      </td></tr>
+    `;
+    return;
+  }
+
+  leads.forEach((l) => {
+    const tr = document.createElement('tr');
+    const opciones = ESTADOS_LEADS.includes(l.estado)
+      ? ESTADOS_LEADS
+      : [l.estado, ...ESTADOS_LEADS]; // conserva un estado no estándar si ya lo tenía
+    tr.innerHTML = `
+      <td>${l.nombre}</td>
+      <td>${l.rubro || '-'}</td>
+      <td>${l.direccion || '-'}</td>
+      <td>${l.telefono}</td>
+      <td>${l.sitio_web ? `<a href="${l.sitio_web}" target="_blank" rel="noopener noreferrer">Sitio</a>` : '-'}</td>
+      <td><a href="${l.link_whatsapp}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline">WhatsApp</a></td>
+      <td>
+        <select data-id="${l.id}" class="estado-lead-select">
+          ${opciones.map((op) => `<option value="${op}" ${op === l.estado ? 'selected' : ''}>${op}</option>`).join('')}
+        </select>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  tbody.querySelectorAll('.estado-lead-select').forEach((sel) => {
+    sel.addEventListener('change', async (e) => {
+      const id = Number(e.target.dataset.id);
+      await fetch(`/api/leads/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ estado: e.target.value }),
+      });
+    });
+  });
+}
+
+document.getElementById('filtroEstadoLeads').addEventListener('change', cargarLeads);
+
+document.getElementById('formBuscarLeads').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const query = document.getElementById('leadsQuery').value.trim();
+  const ciudad = document.getElementById('leadsCiudad').value.trim();
+  const box = document.getElementById('leadsBusquedaResultado');
+  const btn = e.target.querySelector('button[type="submit"]');
+
+  box.classList.remove('hidden', 'error', 'ok');
+  box.textContent = 'Buscando… esto puede tardar unos segundos.';
+  btn.disabled = true;
+  btn.classList.add('is-loading');
+
+  try {
+    const res = await fetch('/api/leads/buscar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, ciudad }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Error al buscar');
+
+    box.classList.add('ok');
+    box.textContent = `Encontrados: ${data.total_encontrados} (proveedor: ${data.proveedor}). Nuevos: ${data.nuevos}, ya existían: ${data.duplicados}.`;
+    cargarLeads();
+  } catch (err) {
+    box.classList.add('error');
+    box.textContent = err.message;
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove('is-loading');
+  }
+});
 
 // ==================== INIT ====================
 
