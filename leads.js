@@ -154,6 +154,41 @@ function formatearDireccionOsm(t) {
   return partes.length ? partes.join(' ') : null;
 }
 
+// El servidor público principal de Overpass (overpass-api.de) es un
+// recurso gratuito compartido y devuelve 504 seguido cuando está
+// saturado. Probamos espejos alternativos antes de rendirnos.
+const OVERPASS_ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.openstreetmap.ru/api/interpreter',
+];
+
+async function consultarOverpass(overpassQl) {
+  let ultimoError;
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain', 'User-Agent': userAgentOsm() },
+        body: overpassQl,
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        ultimoError = new Error(`Overpass (${endpoint}) HTTP ${res.status}`);
+        continue;
+      }
+      return await res.json();
+    } catch (err) {
+      ultimoError = err.name === 'AbortError' ? new Error(`Overpass (${endpoint}) sin respuesta`) : err;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+  throw ultimoError || new Error('Todos los servidores de Overpass fallaron');
+}
+
 async function buscarOsm({ query, ciudad }) {
   const { lat, lon } = await geocodificarCiudad(ciudad);
   const radio = Number(process.env.LEADS_RADIO_METROS) || 5000;
@@ -180,13 +215,7 @@ async function buscarOsm({ query, ciudad }) {
       out center tags;
     `;
 
-  const res = await fetch('https://overpass-api.de/api/interpreter', {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain', 'User-Agent': userAgentOsm() },
-    body: overpassQl,
-  });
-  if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
-  const data = await res.json();
+  const data = await consultarOverpass(overpassQl);
 
   return (data.elements || []).slice(0, maxResultados).map((el) => {
     const t = el.tags || {};
