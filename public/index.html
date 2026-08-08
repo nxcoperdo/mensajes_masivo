@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Envío masivo de WhatsApp</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>📣 Envío masivo de WhatsApp</h1>
+    <span id="configBadge" class="badge badge-muted">Verificando configuración…</span>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="contactos">Contactos</button>
+    <button class="tab-btn" data-tab="campana">Nueva campaña</button>
+    <button class="tab-btn" data-tab="historial">Historial</button>
+  </nav>
+
+  <main>
+    <!-- ===================== TAB: CONTACTOS ===================== -->
+    <section id="tab-contactos" class="tab-panel active">
+      <div class="card">
+        <h2>Importar CSV</h2>
+        <p class="muted">Columnas esperadas: <code>telefono</code> y <code>nombre</code> (podés usar <code>phone</code>/<code>numero</code>/<code>name</code> también). El teléfono se normaliza solo (agrega el 57 de Colombia si falta).</p>
+        <form id="formImportar">
+          <input type="file" name="archivo" id="inputArchivo" accept=".csv" required />
+          <button type="submit" class="btn btn-primary">Importar</button>
+        </form>
+        <div id="importarResultado" class="result-box hidden"></div>
+      </div>
+
+      <div class="card">
+        <h2>Agregar contacto manual</h2>
+        <form id="formAgregarContacto" class="inline-form">
+          <input type="text" name="telefono" placeholder="Teléfono (ej: 3001234567)" required />
+          <input type="text" name="nombre" placeholder="Nombre (opcional)" />
+          <button type="submit" class="btn btn-outline">Agregar</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h2>Lista de contactos (<span id="totalContactos">0</span>)</h2>
+          <div class="header-actions">
+            <span id="seleccionadosCount" class="muted">0 seleccionados</span>
+            <button id="btnSeleccionarTodos" class="btn btn-sm btn-outline">Seleccionar todos</button>
+          </div>
+        </div>
+        <table class="tabla">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Teléfono</th>
+              <th>Nombre</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="tablaContactos"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ===================== TAB: NUEVA CAMPAÑA ===================== -->
+    <section id="tab-campana" class="tab-panel">
+      <div class="card">
+        <h2>Configurar envío</h2>
+        <p class="muted"><strong id="campanaContactosCount">0</strong> contactos seleccionados en la pestaña "Contactos". Si no seleccionaste ninguno, andá a esa pestaña primero.</p>
+
+        <label>Nombre exacto de la plantilla (tal cual está aprobada en Meta)</label>
+        <input type="text" id="templateNombre" placeholder="ej: puntos_nuevos_premios" />
+
+        <label>Idioma</label>
+        <input type="text" id="templateIdioma" value="es" style="max-width: 120px" />
+
+        <h3>Parámetros de la plantilla ({{1}}, {{2}}, …)</h3>
+        <p class="muted">Agregá uno por cada <code>{{N}}</code> que tenga tu plantilla, en orden. "Nombre del contacto" personaliza automáticamente por persona.</p>
+        <div id="parametrosLista"></div>
+        <button id="btnAgregarParametro" type="button" class="btn btn-sm btn-outline">+ Agregar parámetro</button>
+
+        <div class="send-bar">
+          <button id="btnEnviarCampana" class="btn btn-primary btn-lg">Enviar campaña</button>
+        </div>
+        <div id="campanaProgreso" class="result-box hidden"></div>
+      </div>
+    </section>
+
+    <!-- ===================== TAB: HISTORIAL ===================== -->
+    <section id="tab-historial" class="tab-panel">
+      <div class="card">
+        <h2>Campañas enviadas</h2>
+        <table class="tabla">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Plantilla</th>
+              <th>Fecha</th>
+              <th>Estado</th>
+              <th>Enviados</th>
+              <th>Fallidos</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="tablaCampanas"></tbody>
+        </table>
+      </div>
+      <div id="detalleCampana" class="card hidden">
+        <h2>Detalle de campaña <span id="detalleCampanaId"></span></h2>
+        <table class="tabla">
+          <thead>
+            <tr>
+              <th>Teléfono</th>
+              <th>Nombre</th>
+              <th>Estado</th>
+              <th>Detalle</th>
+            </tr>
+          </thead>
+          <tbody id="tablaEnvios"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

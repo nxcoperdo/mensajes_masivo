@@ -1,0 +1,19 @@
+{
+  "name": "whatsapp-broadcast",
+  "version": "1.0.0",
+  "description": "Envío masivo de plantillas de WhatsApp (Meta Cloud API) a una lista de contactos propia. Proyecto standalone, separado de GigantYA.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "multer": "^2.0.1"
+  }
+}
