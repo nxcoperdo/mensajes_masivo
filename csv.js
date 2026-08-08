@@ -9,6 +9,7 @@
  */
 export function normalizeHeader(h) {
   return String(h)
+    .replace(/^﻿/, '') // quita el BOM que agrega Excel al exportar CSV en UTF-8
     .trim()
     .toLowerCase()
     .normalize('NFD')
