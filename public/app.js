@@ -145,6 +145,14 @@ document.getElementById('btnSeleccionarTodos').addEventListener('click', () => {
   renderContactos();
 });
 
+document.getElementById('btnEliminarTodos').addEventListener('click', async () => {
+  if (contactos.length === 0) return;
+  if (!confirm(`¿Eliminar los ${contactos.length} contactos? Esta acción no se puede deshacer.`)) return;
+  await fetch('/api/contactos', { method: 'DELETE' });
+  seleccionados.clear();
+  cargarContactos();
+});
+
 document.getElementById('formAgregarContacto').addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target;

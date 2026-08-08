@@ -410,6 +410,13 @@ input[type='file'] {
 }
 .btn-outline:hover:not(:disabled) { background: var(--color-surface-2); border-color: var(--color-text-muted); }
 
+.btn-danger {
+  background: var(--color-surface);
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+.btn-danger:hover:not(:disabled) { background: var(--color-danger-bg); }
+
 .btn-sm { padding: 6px 12px; font-size: 12.5px; min-height: 32px; }
 .btn-sm svg { width: 14px; height: 14px; }
 .btn-lg { padding: 13px 28px; font-size: 15px; min-height: 46px; }

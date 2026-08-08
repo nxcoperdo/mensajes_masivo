@@ -99,6 +99,11 @@ app.post('/api/contactos', (req, res) => {
   }
 });
 
+app.delete('/api/contactos', (req, res) => {
+  db.prepare('DELETE FROM contactos').run();
+  res.json({ ok: true });
+});
+
 app.delete('/api/contactos/:id', (req, res) => {
   db.prepare('DELETE FROM contactos WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
