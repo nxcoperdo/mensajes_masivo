@@ -3,11 +3,11 @@ import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { timingSafeEqual } from 'crypto';
+import crypto, { timingSafeEqual } from 'crypto';
 import { db } from './db.js';
 import { parseCsv } from './csv.js';
 import { parseExcel } from './excel.js';
-import { sendTemplate, normalizePhone, isWhatsAppConfigured } from './whatsapp.js';
+import { sendTemplate, sendTextMessage, normalizePhone, isWhatsAppConfigured } from './whatsapp.js';
 import { buscarNegocios } from './leads.js';
 
 dotenv.config();
@@ -47,6 +47,10 @@ function secureCompare(a, b) {
  * no se exige login (útil en dev local).
  */
 function requireAuth(req, res, next) {
+  // Meta llama a /webhook directo (sin credenciales) — se protege con
+  // la verificación de token (GET) y la firma HMAC (POST), no con Basic Auth.
+  if (req.path === '/webhook') return next();
+
   const user = process.env.BASIC_AUTH_USER;
   const pass = process.env.BASIC_AUTH_PASS;
   if (!user || !pass) return next();
@@ -65,13 +69,19 @@ function requireAuth(req, res, next) {
 }
 
 app.use(requireAuth);
-app.use(express.json());
+// Guarda el body crudo (necesario para verificar la firma HMAC del
+// webhook de Meta) sin cambiar cómo se usa req.body en el resto de la app.
+app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ==================== CONFIG ====================
 
 app.get('/api/config', (req, res) => {
-  res.json({ whatsappConfigured: isWhatsAppConfigured() });
+  res.json({
+    whatsappConfigured: isWhatsAppConfigured(),
+    webhookVerifyTokenConfigured: Boolean(process.env.WHATSAPP_VERIFY_TOKEN),
+    webhookSignatureConfigured: Boolean(process.env.WHATSAPP_APP_SECRET),
+  });
 });
 
 // ==================== CONTACTOS ====================
@@ -166,11 +176,18 @@ app.post('/api/contactos/importar', (req, res) => {
 
 // ==================== CAMPAÑAS ====================
 
+// Nota sobre `estado` en envios: arranca en 'enviado' y el webhook de
+// Meta lo va escalando a 'entregado' y 'leido' a medida que llegan los
+// callbacks de status (ver sección WEBHOOK más abajo). "enviados" acá
+// cuenta cualquier envío exitoso sin importar en qué estado quedó
+// después — 'entregados'/'leidos' son sub-conteos de esos mismos.
 app.get('/api/campanas', (req, res) => {
   const campanas = db
     .prepare(
       `SELECT c.*,
-         (SELECT COUNT(*) FROM envios e WHERE e.campana_id = c.id AND e.estado = 'enviado') AS enviados,
+         (SELECT COUNT(*) FROM envios e WHERE e.campana_id = c.id AND e.estado IN ('enviado','entregado','leido')) AS enviados,
+         (SELECT COUNT(*) FROM envios e WHERE e.campana_id = c.id AND e.estado IN ('entregado','leido')) AS entregados,
+         (SELECT COUNT(*) FROM envios e WHERE e.campana_id = c.id AND e.estado = 'leido') AS leidos,
          (SELECT COUNT(*) FROM envios e WHERE e.campana_id = c.id AND e.estado = 'fallido') AS fallidos
        FROM campanas c
        ORDER BY c.id DESC`
@@ -183,12 +200,18 @@ app.get('/api/campanas/:id', (req, res) => {
   const campana = db.prepare('SELECT * FROM campanas WHERE id = ?').get(req.params.id);
   if (!campana) return res.status(404).json({ error: 'Campaña no encontrada' });
   const enviados = db
-    .prepare(`SELECT COUNT(*) AS n FROM envios WHERE campana_id = ? AND estado = 'enviado'`)
+    .prepare(`SELECT COUNT(*) AS n FROM envios WHERE campana_id = ? AND estado IN ('enviado','entregado','leido')`)
+    .get(req.params.id).n;
+  const entregados = db
+    .prepare(`SELECT COUNT(*) AS n FROM envios WHERE campana_id = ? AND estado IN ('entregado','leido')`)
+    .get(req.params.id).n;
+  const leidos = db
+    .prepare(`SELECT COUNT(*) AS n FROM envios WHERE campana_id = ? AND estado = 'leido'`)
     .get(req.params.id).n;
   const fallidos = db
     .prepare(`SELECT COUNT(*) AS n FROM envios WHERE campana_id = ? AND estado = 'fallido'`)
     .get(req.params.id).n;
-  res.json({ campana: { ...campana, enviados, fallidos } });
+  res.json({ campana: { ...campana, enviados, entregados, leidos, fallidos } });
 });
 
 app.get('/api/campanas/:id/envios', (req, res) => {
@@ -361,6 +384,201 @@ app.patch('/api/leads/:id', (req, res) => {
     return res.status(404).json({ error: 'Lead no encontrado' });
   }
   res.json({ ok: true });
+});
+
+// ==================== WEBHOOK DE WHATSAPP ====================
+//
+// Recibe dos tipos de eventos de Meta:
+//  - `statuses`: confirmaciones de entrega de mensajes salientes que
+//    mandó esta app (enviado -> entregado -> leido, o fallido). Se
+//    matchean por `wa_message_id` contra `envios` (campañas) y
+//    `mensajes` (respuestas manuales).
+//  - `messages`: mensajes entrantes de las personas (respuestas). Se
+//    guardan en `mensajes` para verlos y contestarlos desde la pestaña
+//    "Webhook".
+//
+// Configuración en Meta (App > WhatsApp > Configuration > Webhook):
+//   Callback URL: https://tu-dominio/webhook
+//   Verify token: el valor de WHATSAPP_VERIFY_TOKEN en .env
+// Si además configurás WHATSAPP_APP_SECRET, se valida la firma
+// HMAC-SHA256 de cada request (header X-Hub-Signature-256) para
+// asegurarnos de que el POST viene realmente de Meta.
+
+const ESTADO_RANK = { enviado: 1, entregado: 2, leido: 3, fallido: 99 };
+const MAPA_ESTADOS_META = { sent: 'enviado', delivered: 'entregado', read: 'leido', failed: 'fallido' };
+
+const insertMensajeEntrante = db.prepare(`
+  INSERT INTO mensajes (telefono, direccion, tipo, texto, wa_message_id, estado, nombre_perfil, leido_por_agente)
+  VALUES (?, 'entrante', ?, ?, ?, 'recibido', ?, 0)
+`);
+
+function extraerTextoMensaje(msg) {
+  switch (msg.type) {
+    case 'text':
+      return msg.text?.body || '';
+    case 'button':
+      return msg.button?.text || '';
+    case 'interactive':
+      return msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || '[Interactivo]';
+    case 'image':
+      return msg.image?.caption || '[Imagen]';
+    case 'video':
+      return msg.video?.caption || '[Video]';
+    case 'audio':
+      return '[Audio]';
+    case 'document':
+      return msg.document?.caption || `[Documento] ${msg.document?.filename || ''}`.trim();
+    case 'sticker':
+      return '[Sticker]';
+    case 'location':
+      return '[Ubicación]';
+    default:
+      return `[${msg.type || 'mensaje'}]`;
+  }
+}
+
+function aplicarEstadoSiCorresponde(tabla, waMessageId, nuevoEstado, error) {
+  const fila = db.prepare(`SELECT estado FROM ${tabla} WHERE wa_message_id = ?`).get(waMessageId);
+  if (!fila) return;
+  const rankActual = ESTADO_RANK[fila.estado] || 0;
+  const rankNuevo = ESTADO_RANK[nuevoEstado] || 0;
+  if (nuevoEstado === 'fallido' || rankNuevo > rankActual) {
+    db.prepare(`UPDATE ${tabla} SET estado = ?, error = ? WHERE wa_message_id = ?`).run(nuevoEstado, error, waMessageId);
+  }
+}
+
+function procesarWebhookWhatsApp(body) {
+  for (const entrada of body.entry || []) {
+    for (const cambio of entrada.changes || []) {
+      const valor = cambio.value || {};
+
+      const nombresPerfil = {};
+      for (const c of valor.contacts || []) {
+        if (c.wa_id && c.profile?.name) nombresPerfil[c.wa_id] = c.profile.name;
+      }
+
+      for (const msg of valor.messages || []) {
+        const telefono = msg.from;
+        if (!telefono) continue;
+        insertMensajeEntrante.run(telefono, msg.type || 'texto', extraerTextoMensaje(msg), msg.id || null, nombresPerfil[telefono] || null);
+      }
+
+      for (const estado of valor.statuses || []) {
+        const nuevoEstado = MAPA_ESTADOS_META[estado.status];
+        if (!nuevoEstado || !estado.id) continue;
+        const error = estado.errors?.[0]?.title || null;
+        aplicarEstadoSiCorresponde('envios', estado.id, nuevoEstado, error);
+        aplicarEstadoSiCorresponde('mensajes', estado.id, nuevoEstado, error);
+      }
+    }
+  }
+}
+
+function verificarFirmaWebhook(req) {
+  const secret = process.env.WHATSAPP_APP_SECRET;
+  if (!secret) return true; // sin secret configurado no se valida (ok para desarrollo local)
+  const firma = req.headers['x-hub-signature-256'];
+  if (!firma || !req.rawBody) return false;
+  const esperada = 'sha256=' + crypto.createHmac('sha256', secret).update(req.rawBody).digest('hex');
+  const bufA = Buffer.from(firma);
+  const bufB = Buffer.from(esperada);
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
+
+// Verificación inicial que pide Meta al configurar el webhook.
+app.get('/webhook', (req, res) => {
+  const modo = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
+  if (modo === 'subscribe' && verifyToken && token === verifyToken) {
+    return res.status(200).send(challenge);
+  }
+  res.sendStatus(403);
+});
+
+app.post('/webhook', (req, res) => {
+  if (!verificarFirmaWebhook(req)) {
+    return res.sendStatus(403);
+  }
+  // Meta espera un 200 rápido — respondemos antes de procesar.
+  res.sendStatus(200);
+  try {
+    procesarWebhookWhatsApp(req.body);
+  } catch (err) {
+    console.error('Error procesando webhook de WhatsApp:', err);
+  }
+});
+
+// ==================== CONVERSACIONES (respuestas de la gente) ====================
+
+app.get('/api/conversaciones', (req, res) => {
+  const telefonos = db
+    .prepare(`SELECT telefono, MAX(creado_en) AS ultimo_en FROM mensajes GROUP BY telefono ORDER BY ultimo_en DESC`)
+    .all();
+
+  const conversaciones = telefonos.map(({ telefono }) => {
+    const ultimo = db
+      .prepare(`SELECT texto, direccion, estado, creado_en FROM mensajes WHERE telefono = ? ORDER BY creado_en DESC, id DESC LIMIT 1`)
+      .get(telefono);
+    const contacto = db.prepare('SELECT nombre FROM contactos WHERE telefono = ?').get(telefono);
+    const noLeidos = db
+      .prepare(`SELECT COUNT(*) AS n FROM mensajes WHERE telefono = ? AND direccion = 'entrante' AND leido_por_agente = 0`)
+      .get(telefono).n;
+    return {
+      telefono,
+      nombre: contacto?.nombre || null,
+      ultimo_mensaje: ultimo?.texto || '',
+      ultimo_direccion: ultimo?.direccion,
+      ultimo_estado: ultimo?.estado,
+      ultimo_en: ultimo?.creado_en,
+      no_leidos: noLeidos,
+    };
+  });
+
+  res.json({ conversaciones });
+});
+
+app.get('/api/conversaciones/:telefono/mensajes', (req, res) => {
+  const { telefono } = req.params;
+  const mensajes = db
+    .prepare('SELECT * FROM mensajes WHERE telefono = ? ORDER BY creado_en ASC, id ASC')
+    .all(telefono);
+  db.prepare(`UPDATE mensajes SET leido_por_agente = 1 WHERE telefono = ? AND direccion = 'entrante' AND leido_por_agente = 0`).run(telefono);
+  res.json({ mensajes });
+});
+
+/**
+ * Manda una respuesta de texto libre a una conversación. Solo funciona
+ * dentro de la ventana de 24hs desde el último mensaje del usuario
+ * (restricción de Meta) — fuera de eso hay que usar una plantilla
+ * (pestaña "Nueva campaña").
+ */
+app.post('/api/conversaciones/:telefono/responder', async (req, res) => {
+  const { telefono } = req.params;
+  const { texto } = req.body || {};
+  if (!texto || !String(texto).trim()) {
+    return res.status(400).json({ error: 'Falta el texto del mensaje' });
+  }
+  if (!isWhatsAppConfigured()) {
+    return res.status(400).json({ error: 'WhatsApp no está configurado en el .env de este proyecto' });
+  }
+
+  const textoLimpio = texto.trim();
+  const resultado = await sendTextMessage({ to: telefono, body: textoLimpio });
+
+  const insertado = db
+    .prepare(`
+      INSERT INTO mensajes (telefono, direccion, tipo, texto, wa_message_id, estado, error, leido_por_agente)
+      VALUES (?, 'saliente', 'texto', ?, ?, ?, ?, 1)
+    `)
+    .run(telefono, textoLimpio, resultado.messageId || null, resultado.ok ? 'enviado' : 'fallido', resultado.ok ? null : resultado.error);
+
+  if (!resultado.ok) {
+    return res.status(502).json({ error: resultado.error, id: insertado.lastInsertRowid });
+  }
+  res.status(201).json({ id: insertado.lastInsertRowid, wa_message_id: resultado.messageId });
 });
 
 const PORT = process.env.PORT || 4100;

@@ -60,6 +60,11 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
       Leads
     </button>
+    <button class="tab-btn" data-tab="webhook">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" /></svg>
+      Webhook
+      <span id="webhookBadgeTab" class="tab-badge hidden">0</span>
+    </button>
   </nav>
 
   <main>
@@ -167,6 +172,8 @@
                 <th>Fecha</th>
                 <th>Estado</th>
                 <th>Enviados</th>
+                <th>Entregados</th>
+                <th>Leídos</th>
                 <th>Fallidos</th>
                 <th></th>
               </tr>
@@ -249,6 +256,68 @@
             </thead>
             <tbody id="tablaLeads"></tbody>
           </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== TAB: WEBHOOK (ESTADOS Y CONVERSACIONES) ===================== -->
+    <section id="tab-webhook" class="tab-panel">
+      <div class="card">
+        <h2>Configuración del webhook</h2>
+        <p class="muted">
+          Configurá esta URL en Meta (tu app &gt; WhatsApp &gt; Configuration &gt; Webhook) para recibir
+          confirmaciones de estado (enviado, entregado, leído) y los mensajes que te respondan.
+        </p>
+        <div class="webhook-info">
+          <div class="webhook-info-row">
+            <span class="webhook-info-label">Callback URL</span>
+            <code id="webhookUrl">—</code>
+          </div>
+          <div class="webhook-info-row">
+            <span class="webhook-info-label">Verify token</span>
+            <span id="webhookTokenBadge" class="badge badge-muted">Verificando…</span>
+          </div>
+          <div class="webhook-info-row">
+            <span class="webhook-info-label">Firma HMAC (X-Hub-Signature-256)</span>
+            <span id="webhookFirmaBadge" class="badge badge-muted">Verificando…</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card webhook-chat-card">
+        <div class="card-header">
+          <h2>Conversaciones (<span id="totalConversaciones">0</span>)</h2>
+          <button id="btnRefrescarConversaciones" class="btn btn-sm btn-outline">Actualizar</button>
+        </div>
+        <div class="chat-layout">
+          <div class="chat-lista" id="listaConversaciones">
+            <div class="empty-state">Todavía no llegaron mensajes al webhook.</div>
+          </div>
+          <div class="chat-panel">
+            <div id="chatVacio" class="chat-vacio">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" /></svg>
+              <div>Elegí una conversación de la izquierda para ver los mensajes y responder.</div>
+            </div>
+            <div id="chatActivo" class="chat-activo hidden">
+              <div class="chat-header">
+                <strong id="chatContactoNombre"></strong>
+                <span id="chatContactoTelefono" class="muted"></span>
+              </div>
+              <div id="chatMensajes" class="chat-mensajes"></div>
+              <form id="formResponder" class="chat-input-bar">
+                <label for="inputRespuesta" class="sr-only">Escribí una respuesta</label>
+                <input type="text" id="inputRespuesta" placeholder="Escribí una respuesta…" autocomplete="off" />
+                <button type="submit" class="btn btn-primary">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg>
+                  Enviar
+                </button>
+              </form>
+              <p class="muted chat-nota">
+                Solo se puede responder con texto libre dentro de las 24hs desde el último mensaje de la
+                persona. Pasado ese tiempo, Meta exige usar una plantilla (pestaña "Nueva campaña").
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     </section>

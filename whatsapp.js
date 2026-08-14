@@ -82,3 +82,51 @@ export async function sendTemplate({ to, template, languageCode, parameters = []
     return { ok: false, error: err.message };
   }
 }
+
+/**
+ * Manda un mensaje de texto libre (no plantilla) para responder una
+ * conversación. Meta solo permite esto dentro de la "ventana de
+ * servicio al cliente" de 24hs desde el último mensaje del usuario —
+ * fuera de esa ventana la API devuelve error y hay que usar plantilla.
+ *
+ * @param {Object} params
+ * @param {string} params.to   - teléfono (se normaliza acá)
+ * @param {string} params.body - texto del mensaje
+ * @returns {Promise<{ok: boolean, messageId?: string, error?: string}>}
+ */
+export async function sendTextMessage({ to, body }) {
+  const config = getConfig();
+  if (!config) {
+    return { ok: false, error: 'WhatsApp no configurado (faltan WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_API_TOKEN en .env)' };
+  }
+
+  const finalTo = normalizePhone(to);
+  if (!finalTo) {
+    return { ok: false, error: `Teléfono inválido: "${to}"` };
+  }
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    to: finalTo,
+    type: 'text',
+    text: { body: String(body) },
+  };
+
+  try {
+    const res = await fetch(`${config.base}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data.error?.message || `HTTP ${res.status}` };
+    }
+    return { ok: true, messageId: data.messages?.[0]?.id };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}

@@ -48,6 +48,9 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
     if (btn.dataset.tab === 'leads') {
       cargarLeads();
     }
+    if (btn.dataset.tab === 'webhook') {
+      cargarConversaciones();
+    }
   });
 });
 
@@ -64,6 +67,26 @@ async function cargarConfig() {
     } else {
       badge.textContent = '⚠️ Falta configurar .env';
       badge.className = 'badge badge-error';
+    }
+
+    document.getElementById('webhookUrl').textContent = `${window.location.origin}/webhook`;
+
+    const tokenBadge = document.getElementById('webhookTokenBadge');
+    if (data.webhookVerifyTokenConfigured) {
+      tokenBadge.textContent = 'Configurado ✓';
+      tokenBadge.className = 'badge badge-ok';
+    } else {
+      tokenBadge.textContent = 'Falta WHATSAPP_VERIFY_TOKEN en .env';
+      tokenBadge.className = 'badge badge-error';
+    }
+
+    const firmaBadge = document.getElementById('webhookFirmaBadge');
+    if (data.webhookSignatureConfigured) {
+      firmaBadge.textContent = 'Activa ✓';
+      firmaBadge.className = 'badge badge-ok';
+    } else {
+      firmaBadge.textContent = 'Sin validar (opcional)';
+      firmaBadge.className = 'badge badge-muted';
     }
   } catch {
     badge.textContent = 'No se pudo conectar al servidor';
@@ -331,7 +354,7 @@ async function cargarCampanas() {
 
   if (data.campanas.length === 0) {
     tbody.innerHTML = `
-      <tr><td colspan="7">
+      <tr><td colspan="9">
         <div class="empty-state">Todavía no enviaste ninguna campaña.</div>
       </td></tr>
     `;
@@ -347,6 +370,8 @@ async function cargarCampanas() {
       <td>${fecha}</td>
       <td><span class="estado-pill estado-${c.estado}">${c.estado}</span></td>
       <td>${c.enviados}</td>
+      <td>${c.entregados}</td>
+      <td>${c.leidos}</td>
       <td>${c.fallidos}</td>
       <td><button class="btn btn-sm btn-outline" data-ver="${c.id}">${ICONO_VER} Ver detalle</button></td>
     `;
@@ -474,8 +499,161 @@ document.getElementById('formBuscarLeads').addEventListener('submit', async (e) 
   }
 });
 
+// ==================== WEBHOOK / CONVERSACIONES ====================
+
+let conversacionActual = null; // teléfono de la conversación abierta en el chat
+let pollMensajesActuales = null;
+
+const ICONO_CONVERSACIONES_VACIO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" /></svg>';
+const ICONOS_ESTADO_MSG = { enviado: '✓', entregado: '✓✓', leido: '✓✓', fallido: '✕' };
+
+function inicialesDe(nombre, telefono) {
+  return (nombre || telefono || '?').trim().slice(0, 2).toUpperCase();
+}
+
+function formatearHora(fechaTexto) {
+  if (!fechaTexto) return '';
+  return new Date(fechaTexto).toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str || '';
+  return div.innerHTML;
+}
+
+async function cargarConversaciones() {
+  const res = await fetch('/api/conversaciones');
+  const data = await res.json();
+  renderConversaciones(data.conversaciones);
+  actualizarBadgeWebhook(data.conversaciones);
+}
+
+function actualizarBadgeWebhook(conversaciones) {
+  const total = conversaciones.reduce((acc, c) => acc + (c.no_leidos || 0), 0);
+  const badge = document.getElementById('webhookBadgeTab');
+  if (total > 0) {
+    badge.textContent = total > 99 ? '99+' : total;
+    badge.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden');
+  }
+}
+
+function renderConversaciones(conversaciones) {
+  const cont = document.getElementById('listaConversaciones');
+  document.getElementById('totalConversaciones').textContent = conversaciones.length;
+
+  if (conversaciones.length === 0) {
+    cont.innerHTML = `<div class="empty-state">${ICONO_CONVERSACIONES_VACIO}<div>Todavía no llegaron mensajes al webhook.</div></div>`;
+    return;
+  }
+
+  cont.innerHTML = '';
+  conversaciones.forEach((c) => {
+    const nombreMostrar = c.nombre || c.telefono;
+    const prefijo = c.ultimo_direccion === 'saliente' ? 'Vos: ' : '';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'conv-item' + (c.telefono === conversacionActual ? ' active' : '');
+    btn.innerHTML = `
+      <span class="conv-avatar">${inicialesDe(c.nombre, c.telefono)}</span>
+      <span class="conv-body">
+        <span class="conv-top">
+          <span class="conv-nombre">${escapeHtml(nombreMostrar)}</span>
+          <span class="conv-hora">${formatearHora(c.ultimo_en)}</span>
+        </span>
+        <span class="conv-preview"><span>${escapeHtml(prefijo + (c.ultimo_mensaje || '').slice(0, 40))}</span></span>
+      </span>
+      ${c.no_leidos > 0 ? `<span class="conv-unread-badge">${c.no_leidos}</span>` : ''}
+    `;
+    btn.addEventListener('click', () => abrirConversacion(c.telefono, c.nombre));
+    cont.appendChild(btn);
+  });
+}
+
+async function abrirConversacion(telefono, nombre) {
+  conversacionActual = telefono;
+  document.getElementById('chatVacio').classList.add('hidden');
+  document.getElementById('chatActivo').classList.remove('hidden');
+  document.getElementById('chatContactoNombre').textContent = nombre || telefono;
+  document.getElementById('chatContactoTelefono').textContent = nombre ? telefono : '';
+
+  await cargarMensajes(telefono);
+  cargarConversaciones(); // refresca la lista para marcar esta conversación como activa y sacar su badge
+
+  clearInterval(pollMensajesActuales);
+  pollMensajesActuales = setInterval(() => cargarMensajes(telefono), 4000);
+}
+
+async function cargarMensajes(telefono) {
+  const res = await fetch(`/api/conversaciones/${encodeURIComponent(telefono)}/mensajes`);
+  const data = await res.json();
+  if (conversacionActual !== telefono) return; // se cambió de conversación mientras esperaba la respuesta
+  renderMensajes(data.mensajes);
+}
+
+function renderMensajes(mensajes) {
+  const cont = document.getElementById('chatMensajes');
+  const estabaAbajo = cont.scrollTop + cont.clientHeight >= cont.scrollHeight - 40;
+  cont.innerHTML = '';
+
+  if (mensajes.length === 0) {
+    cont.innerHTML = `<div class="empty-state">Todavía no hay mensajes en esta conversación.</div>`;
+    return;
+  }
+
+  mensajes.forEach((m) => {
+    const div = document.createElement('div');
+    div.className = `msg-burbuja ${m.direccion === 'saliente' ? 'msg-saliente' : 'msg-entrante'}`;
+    const tick = m.direccion === 'saliente' ? (ICONOS_ESTADO_MSG[m.estado] || '') : '';
+    div.innerHTML = `
+      <div>${escapeHtml(m.texto)}</div>
+      <div class="msg-meta${m.estado === 'fallido' ? ' error' : ''}">
+        <span class="msg-hora">${formatearHora(m.creado_en)}</span>
+        ${tick ? `<span>${tick}</span>` : ''}
+      </div>
+    `;
+    if (m.estado === 'fallido' && m.error) div.title = m.error;
+    cont.appendChild(div);
+  });
+
+  if (estabaAbajo) cont.scrollTop = cont.scrollHeight;
+}
+
+document.getElementById('formResponder').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!conversacionActual) return;
+  const input = document.getElementById('inputRespuesta');
+  const texto = input.value.trim();
+  if (!texto) return;
+
+  const btn = e.target.querySelector('button[type="submit"]');
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/api/conversaciones/${encodeURIComponent(conversacionActual)}/responder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texto }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo enviar la respuesta');
+    input.value = '';
+    await cargarMensajes(conversacionActual);
+    cargarConversaciones();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('btnRefrescarConversaciones').addEventListener('click', () => cargarConversaciones());
+
 // ==================== INIT ====================
 
 cargarConfig();
 cargarContactos();
 renderParametros();
+cargarConversaciones();
+setInterval(cargarConversaciones, 10000); // refresco periódico para el badge de "no leídos" en la pestaña

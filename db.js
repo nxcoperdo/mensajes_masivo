@@ -42,6 +42,23 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_envios_campana ON envios(campana_id);
 
+  CREATE TABLE IF NOT EXISTS mensajes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telefono TEXT NOT NULL,
+    direccion TEXT NOT NULL, -- 'entrante' | 'saliente'
+    tipo TEXT NOT NULL DEFAULT 'texto', -- text, image, button, etc. (tal cual lo manda Meta)
+    texto TEXT,
+    wa_message_id TEXT,
+    estado TEXT NOT NULL DEFAULT 'recibido', -- entrante: 'recibido' | saliente: 'enviado'|'entregado'|'leido'|'fallido'
+    error TEXT,
+    nombre_perfil TEXT, -- nombre de WhatsApp que manda Meta en el webhook (puede no coincidir con el contacto guardado)
+    leido_por_agente INTEGER NOT NULL DEFAULT 0,
+    creado_en TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_mensajes_telefono ON mensajes(telefono, creado_en);
+  CREATE INDEX IF NOT EXISTS idx_mensajes_wa_id ON mensajes(wa_message_id);
+
   CREATE TABLE IF NOT EXISTS leads_prospectos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nombre TEXT NOT NULL,
