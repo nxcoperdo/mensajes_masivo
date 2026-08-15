@@ -51,6 +51,10 @@ function requireAuth(req, res, next) {
   // la verificación de token (GET) y la firma HMAC (POST), no con Basic Auth.
   if (req.path === '/webhook') return next();
 
+  // La política de privacidad debe ser accesible públicamente para que
+  // Meta pueda verificarla al configurar la app en Facebook Developers.
+  if (req.path === '/privacidad.html') return next();
+
   const user = process.env.BASIC_AUTH_USER;
   const pass = process.env.BASIC_AUTH_PASS;
   if (!user || !pass) return next();
