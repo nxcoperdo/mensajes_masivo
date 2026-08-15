@@ -572,11 +572,16 @@ const ESTADO_RANK = { enviado: 1, entregado: 2, leido: 3, fallido: 99 };
 const MAPA_ESTADOS_META = { sent: 'enviado', delivered: 'entregado', read: 'leido', failed: 'fallido' };
 
 const insertMensajeEntrante = db.prepare(`
-  INSERT INTO mensajes (telefono, direccion, tipo, texto, wa_message_id, estado, nombre_perfil, leido_por_agente, cliente_id)
-  VALUES (?, 'entrante', ?, ?, ?, 'recibido', ?, 0, ?)
+  INSERT INTO mensajes (telefono, direccion, tipo, texto, media_id, media_mime_type, wa_message_id, estado, nombre_perfil, leido_por_agente, cliente_id)
+  VALUES (?, 'entrante', ?, ?, ?, ?, ?, 'recibido', ?, 0, ?)
 `);
 
 const clientePorPhoneNumberId = db.prepare('SELECT id FROM clientes WHERE phone_number_id = ?');
+
+// Tipos de mensaje que traen un archivo descargable de Meta (`msg.<tipo>.id`
+// + `.mime_type`) — se guardan para poder mostrarlos después vía
+// GET /api/mensajes/:id/media (ver más abajo).
+const TIPOS_CON_MEDIA = new Set(['image', 'sticker', 'video', 'audio', 'document']);
 
 function extraerTextoMensaje(msg) {
   switch (msg.type) {
@@ -591,7 +596,7 @@ function extraerTextoMensaje(msg) {
     case 'video':
       return msg.video?.caption || '[Video]';
     case 'audio':
-      return '[Audio]';
+      return msg.audio?.voice ? '[Nota de voz]' : '[Audio]';
     case 'document':
       return msg.document?.caption || `[Documento] ${msg.document?.filename || ''}`.trim();
     case 'sticker':
@@ -601,6 +606,12 @@ function extraerTextoMensaje(msg) {
     default:
       return `[${msg.type || 'mensaje'}]`;
   }
+}
+
+function extraerMedia(msg) {
+  if (!TIPOS_CON_MEDIA.has(msg.type)) return { mediaId: null, mimeType: null };
+  const campo = msg[msg.type] || {};
+  return { mediaId: campo.id || null, mimeType: campo.mime_type || null };
 }
 
 function aplicarEstadoSiCorresponde(tabla, waMessageId, nuevoEstado, error) {
@@ -633,7 +644,17 @@ function procesarWebhookWhatsApp(body) {
       for (const msg of valor.messages || []) {
         const telefono = msg.from;
         if (!telefono) continue;
-        insertMensajeEntrante.run(telefono, msg.type || 'texto', extraerTextoMensaje(msg), msg.id || null, nombresPerfil[telefono] || null, cliente.id);
+        const { mediaId, mimeType } = extraerMedia(msg);
+        insertMensajeEntrante.run(
+          telefono,
+          msg.type || 'texto',
+          extraerTextoMensaje(msg),
+          mediaId,
+          mimeType,
+          msg.id || null,
+          nombresPerfil[telefono] || null,
+          cliente.id
+        );
       }
 
       for (const estado of valor.statuses || []) {
@@ -722,6 +743,56 @@ app.get('/api/conversaciones/:telefono/mensajes', (req, res) => {
     .all(telefono, clienteId);
   db.prepare(`UPDATE mensajes SET leido_por_agente = 1 WHERE telefono = ? AND cliente_id = ? AND direccion = 'entrante' AND leido_por_agente = 0`).run(telefono, clienteId);
   res.json({ mensajes });
+});
+
+/**
+ * Proxy autenticado para bajar el archivo (imagen/sticker/video/audio/
+ * documento) de un mensaje del webhook. Meta no da una URL pública
+ * directa: hay que pedir la URL temporal con GET /{media_id} y después
+ * bajar esa URL, ambos pasos con el access token del cliente dueño del
+ * mensaje — por eso esto pasa por el servidor y no directo desde el
+ * navegador.
+ */
+app.get('/api/mensajes/:id/media', async (req, res) => {
+  const mensaje = db
+    .prepare(
+      `SELECT m.media_id, m.media_mime_type, c.access_token
+       FROM mensajes m JOIN clientes c ON c.id = m.cliente_id
+       WHERE m.id = ? AND m.cliente_id = ?`
+    )
+    .get(req.params.id, req.session.clienteId);
+
+  if (!mensaje || !mensaje.media_id) {
+    return res.status(404).json({ error: 'Mensaje sin archivo adjunto' });
+  }
+  if (!mensaje.access_token) {
+    return res.status(400).json({ error: 'Este cliente no tiene WhatsApp conectado' });
+  }
+
+  const apiVersion = process.env.WHATSAPP_API_VERSION || 'v20.0';
+  try {
+    const metaRes = await fetch(`https://graph.facebook.com/${apiVersion}/${mensaje.media_id}`, {
+      headers: { Authorization: `Bearer ${mensaje.access_token}` },
+    });
+    const metaData = await metaRes.json();
+    if (!metaRes.ok || !metaData.url) {
+      return res.status(502).json({ error: metaData.error?.message || 'No se pudo obtener el archivo (puede haber expirado en los servidores de Meta)' });
+    }
+
+    const archivoRes = await fetch(metaData.url, {
+      headers: { Authorization: `Bearer ${mensaje.access_token}` },
+    });
+    if (!archivoRes.ok) {
+      return res.status(502).json({ error: `Meta devolvió HTTP ${archivoRes.status} al bajar el archivo` });
+    }
+
+    res.set('Content-Type', mensaje.media_mime_type || metaData.mime_type || 'application/octet-stream');
+    res.set('Cache-Control', 'private, max-age=3600');
+    const buffer = Buffer.from(await archivoRes.arrayBuffer());
+    res.send(buffer);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
 });
 
 /**

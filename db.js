@@ -69,6 +69,8 @@ db.exec(`
     direccion TEXT NOT NULL, -- 'entrante' | 'saliente'
     tipo TEXT NOT NULL DEFAULT 'texto', -- text, image, button, etc. (tal cual lo manda Meta)
     texto TEXT,
+    media_id TEXT, -- id de Meta para bajar el archivo (imagen/sticker/video/audio/documento) vía Graph API
+    media_mime_type TEXT,
     wa_message_id TEXT,
     estado TEXT NOT NULL DEFAULT 'recibido', -- entrante: 'recibido' | saliente: 'enviado'|'entregado'|'leido'|'fallido'
     error TEXT,
@@ -119,6 +121,8 @@ agregarColumnaSiFalta('contactos', 'cliente_id INTEGER');
 agregarColumnaSiFalta('campanas', 'cliente_id INTEGER');
 agregarColumnaSiFalta('mensajes', 'cliente_id INTEGER');
 agregarColumnaSiFalta('leads_prospectos', 'cliente_id INTEGER');
+agregarColumnaSiFalta('mensajes', 'media_id TEXT');
+agregarColumnaSiFalta('mensajes', 'media_mime_type TEXT');
 
 /**
  * `contactos` y `leads_prospectos` tenían `UNIQUE(telefono)` a nivel de

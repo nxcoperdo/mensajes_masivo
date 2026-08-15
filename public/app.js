@@ -728,6 +728,35 @@ async function cargarMensajes(telefono) {
   renderMensajes(data.mensajes);
 }
 
+const TIPOS_CON_MEDIA = new Set(['image', 'sticker', 'video', 'audio', 'document']);
+
+/**
+ * Placeholders tipo "[Imagen]" que guarda el servidor cuando el mensaje
+ * no trae caption — no tiene sentido repetirlos como texto debajo de la
+ * vista previa del archivo, así que se ocultan (el media ya lo dice).
+ */
+const PLACEHOLDERS_MEDIA = new Set(['[Imagen]', '[Sticker]', '[Video]', '[Audio]', '[Nota de voz]']);
+
+function renderMediaMensaje(m) {
+  if (!TIPOS_CON_MEDIA.has(m.tipo) || !m.media_id) return '';
+  const url = `/api/mensajes/${m.id}/media`;
+
+  if (m.tipo === 'image' || m.tipo === 'sticker') {
+    return `<img src="${url}" alt="" class="msg-media-img" loading="lazy" />`;
+  }
+  if (m.tipo === 'video') {
+    return `<video src="${url}" controls preload="metadata" class="msg-media-video"></video>`;
+  }
+  if (m.tipo === 'audio') {
+    return `<audio src="${url}" controls preload="metadata" class="msg-media-audio"></audio>`;
+  }
+  if (m.tipo === 'document') {
+    const nombre = (m.texto || '').replace(/^\[Documento\]\s*/, '') || 'Descargar documento';
+    return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="msg-media-doc">📄 ${escapeHtml(nombre)}</a>`;
+  }
+  return '';
+}
+
 function renderMensajes(mensajes) {
   const cont = document.getElementById('chatMensajes');
   const estabaAbajo = cont.scrollTop + cont.clientHeight >= cont.scrollHeight - 40;
@@ -742,8 +771,11 @@ function renderMensajes(mensajes) {
     const div = document.createElement('div');
     div.className = `msg-burbuja ${m.direccion === 'saliente' ? 'msg-saliente' : 'msg-entrante'}`;
     const tick = m.direccion === 'saliente' ? (ICONOS_ESTADO_MSG[m.estado] || '') : '';
+    const media = renderMediaMensaje(m);
+    const mostrarTexto = m.texto && !(media && PLACEHOLDERS_MEDIA.has(m.texto));
     div.innerHTML = `
-      <div>${escapeHtml(m.texto)}</div>
+      ${media}
+      ${mostrarTexto ? `<div>${escapeHtml(m.texto)}</div>` : ''}
       <div class="msg-meta${m.estado === 'fallido' ? ' error' : ''}">
         <span class="msg-hora">${formatearHora(m.creado_en)}</span>
         ${tick ? `<span>${tick}</span>` : ''}
