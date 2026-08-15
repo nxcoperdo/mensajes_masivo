@@ -7,16 +7,22 @@ dotenv.config();
  * directa a graph.facebook.com), pero standalone.
  */
 
-function getConfig() {
-  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  const token = process.env.WHATSAPP_API_TOKEN;
+/**
+ * Arma la config de la Cloud API. Cada cliente tiene sus propias
+ * credenciales (guardadas en `clientes.phone_number_id`/
+ * `clientes.access_token` tras el Embedded Signup) y el caller SIEMPRE
+ * las pasa explícitas — sin fallback al .env global acá, porque eso
+ * permitiría que un cliente sin WhatsApp conectado mande mensajes con
+ * el número de otro cliente (el primero que haya sembrado el .env).
+ */
+function getConfig(phoneId, token) {
   const apiVersion = process.env.WHATSAPP_API_VERSION || 'v20.0';
   if (!phoneId || !token) return null;
   return { base: `https://graph.facebook.com/${apiVersion}/${phoneId}`, token };
 }
 
-export function isWhatsAppConfigured() {
-  return getConfig() !== null;
+export function isWhatsAppConfigured(phoneId, token) {
+  return getConfig(phoneId, token) !== null;
 }
 
 /**
@@ -38,12 +44,14 @@ export function normalizePhone(rawPhone) {
  * @param {string} params.template     - nombre exacto de la plantilla en Meta
  * @param {string} [params.languageCode]
  * @param {string[]} [params.parameters] - valores para {{1}}, {{2}}...
+ * @param {string} [params.phoneNumberId] - de `clientes.phone_number_id`
+ * @param {string} [params.accessToken]   - de `clientes.access_token`
  * @returns {Promise<{ok: boolean, messageId?: string, error?: string}>}
  */
-export async function sendTemplate({ to, template, languageCode, parameters = [] }) {
-  const config = getConfig();
+export async function sendTemplate({ to, template, languageCode, parameters = [], phoneNumberId, accessToken }) {
+  const config = getConfig(phoneNumberId, accessToken);
   if (!config) {
-    return { ok: false, error: 'WhatsApp no configurado (faltan WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_API_TOKEN en .env)' };
+    return { ok: false, error: 'WhatsApp no configurado para este cliente (conectá tu cuenta de WhatsApp Business)' };
   }
 
   const finalTo = normalizePhone(to);
@@ -92,12 +100,14 @@ export async function sendTemplate({ to, template, languageCode, parameters = []
  * @param {Object} params
  * @param {string} params.to   - teléfono (se normaliza acá)
  * @param {string} params.body - texto del mensaje
+ * @param {string} [params.phoneNumberId] - de `clientes.phone_number_id`
+ * @param {string} [params.accessToken]   - de `clientes.access_token`
  * @returns {Promise<{ok: boolean, messageId?: string, error?: string}>}
  */
-export async function sendTextMessage({ to, body }) {
-  const config = getConfig();
+export async function sendTextMessage({ to, body, phoneNumberId, accessToken }) {
+  const config = getConfig(phoneNumberId, accessToken);
   if (!config) {
-    return { ok: false, error: 'WhatsApp no configurado (faltan WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_API_TOKEN en .env)' };
+    return { ok: false, error: 'WhatsApp no configurado para este cliente (conectá tu cuenta de WhatsApp Business)' };
   }
 
   const finalTo = normalizePhone(to);

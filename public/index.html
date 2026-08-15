@@ -40,10 +40,28 @@
           <path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z" />
         </svg>
       </button>
+      <button type="button" id="btnLogout" class="icon-btn" title="Cerrar sesión" aria-label="Cerrar sesión">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="M16 17l5-5-5-5" /><path d="M21 12H9" /></svg>
+      </button>
     </div>
   </header>
 
-  <nav class="tabs">
+  <!-- ===================== PANTALLA: CONECTAR WHATSAPP ===================== -->
+  <div id="pantallaConectar" class="connect-shell hidden">
+    <h2>Conectá tu WhatsApp Business</h2>
+    <p class="muted">
+      Para empezar a mandar campañas necesitás vincular tu propia cuenta de WhatsApp Business.
+      Se abre una ventana de Meta donde autorizás la conexión — no compartimos tus credenciales.
+    </p>
+    <div class="card">
+      <button type="button" id="btnConectarWhatsApp" class="btn btn-primary btn-lg" style="width: 100%; justify-content: center;">
+        Conectar WhatsApp Business
+      </button>
+      <div id="conectarResultado" class="result-box hidden"></div>
+    </div>
+  </div>
+
+  <nav id="navTabs" class="tabs">
     <button class="tab-btn active" data-tab="contactos">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></svg>
       Contactos
@@ -67,7 +85,7 @@
     </button>
   </nav>
 
-  <main>
+  <main id="appMain">
     <!-- ===================== TAB: CONTACTOS ===================== -->
     <section id="tab-contactos" class="tab-panel active">
       <div class="card">

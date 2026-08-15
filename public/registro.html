@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#075e54" />
+  <title>Crear cuenta · Mensajes Masivos</title>
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="auth-shell">
+    <div class="auth-brand">
+      <img src="/assets/code-repair-tech-header.png" alt="Code Repair Tech" />
+      <span>Mensajes Masivos</span>
+    </div>
+
+    <div class="card auth-card">
+      <h2>Crear cuenta</h2>
+      <p class="muted">Después de registrarte, conectás tu propia cuenta de WhatsApp Business.</p>
+
+      <form id="formRegistro">
+        <label for="nombre_negocio">Nombre del negocio</label>
+        <input type="text" id="nombre_negocio" name="nombre_negocio" autocomplete="organization" required />
+
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" autocomplete="username" required />
+
+        <label for="password">Contraseña</label>
+        <input type="password" id="password" name="password" autocomplete="new-password" minlength="8" required />
+        <p class="muted" style="margin-top: 4px;">Mínimo 8 caracteres.</p>
+
+        <div class="send-bar" style="margin-top: 14px; padding-top: 0; border-top: none;">
+          <button type="submit" class="btn btn-primary btn-lg" style="width: 100%; justify-content: center;">Crear cuenta</button>
+        </div>
+      </form>
+      <div id="registroResultado" class="result-box hidden"></div>
+
+      <p class="auth-switch">¿Ya tenés cuenta? <a href="/login.html">Iniciá sesión</a></p>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('formRegistro').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const nombre_negocio = document.getElementById('nombre_negocio').value.trim();
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      const box = document.getElementById('registroResultado');
+      const btn = e.target.querySelector('button[type="submit"]');
+
+      box.classList.add('hidden');
+      box.classList.remove('error', 'ok');
+      btn.disabled = true;
+      btn.classList.add('is-loading');
+
+      try {
+        const res = await fetch('/api/auth/registro', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password, nombre_negocio }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'No se pudo crear la cuenta');
+        window.location.href = '/';
+      } catch (err) {
+        box.classList.remove('hidden');
+        box.classList.add('error');
+        box.textContent = err.message;
+        btn.disabled = false;
+        btn.classList.remove('is-loading');
+      }
+    });
+  </script>
+</body>
+</html>

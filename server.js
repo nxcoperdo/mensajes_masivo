@@ -1,10 +1,12 @@
 import express from 'express';
+import session from 'express-session';
 import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import crypto, { timingSafeEqual } from 'crypto';
 import { db } from './db.js';
+import { hashPassword, verifyPassword } from './auth.js';
 import { parseCsv } from './csv.js';
 import { parseExcel } from './excel.js';
 import { sendTemplate, sendTextMessage, normalizePhone, isWhatsAppConfigured } from './whatsapp.js';
@@ -27,71 +29,215 @@ const upload = multer({
   },
 });
 
-/**
- * Compara dos strings en tiempo constante (evita timing attacks),
- * sin explotar si difieren en longitud.
- */
-function secureCompare(a, b) {
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  if (bufA.length !== bufB.length) {
-    timingSafeEqual(bufA, bufA); // igual costo que una comparación real
-    return false;
-  }
-  return timingSafeEqual(bufA, bufB);
+// Rutas alcanzables sin sesión iniciada (páginas de login/registro y sus
+// assets, el callback de OAuth de Meta, la política de privacidad, y el
+// webhook que llama Meta directo). Todo lo demás exige `req.session.clienteId`.
+const RUTAS_PUBLICAS = new Set([
+  '/login.html',
+  '/registro.html',
+  '/oauth/callback',
+  '/privacidad.html',
+  '/style.css',
+  '/favicon.ico',
+  '/auth.js',
+  '/api/auth/login',
+  '/api/auth/registro',
+]);
+
+function esRutaPublica(req) {
+  if (req.path === '/webhook') return true;
+  if (RUTAS_PUBLICAS.has(req.path)) return true;
+  if (req.path.startsWith('/assets/')) return true;
+  return false;
 }
 
 /**
- * HTTP Basic Auth para toda la app (API + estáticos). Credenciales en
- * BASIC_AUTH_USER / BASIC_AUTH_PASS del .env. Si no están configuradas,
- * no se exige login (útil en dev local).
+ * Autenticación por sesión (login por cliente). Reemplaza el Basic Auth
+ * único que tenía todo el proyecto antes de volverse multi-tenant — ese
+ * usuario/contraseña ahora vive como credenciales del primer cliente
+ * (sembrado en db.js), no como un gate global.
  */
 function requireAuth(req, res, next) {
-  // Meta llama a /webhook directo (sin credenciales) — se protege con
-  // la verificación de token (GET) y la firma HMAC (POST), no con Basic Auth.
-  if (req.path === '/webhook') return next();
+  if (esRutaPublica(req)) return next();
+  if (req.session && req.session.clienteId) return next();
 
-  // La política de privacidad debe ser accesible públicamente para que
-  // Meta pueda verificarla al configurar la app en Facebook Developers.
-  if (req.path === '/privacidad.html') return next();
-
-  const user = process.env.BASIC_AUTH_USER;
-  const pass = process.env.BASIC_AUTH_PASS;
-  if (!user || !pass) return next();
-
-  const header = req.headers.authorization || '';
-  const [scheme, encoded] = header.split(' ');
-  if (scheme === 'Basic' && encoded) {
-    const [reqUser, reqPass] = Buffer.from(encoded, 'base64').toString('utf-8').split(':');
-    if (reqUser && reqPass && secureCompare(reqUser, user) && secureCompare(reqPass, pass)) {
-      return next();
-    }
+  if (req.path.startsWith('/api/')) {
+    return res.status(401).json({ error: 'No autenticado' });
   }
-
-  res.set('WWW-Authenticate', 'Basic realm="Envio masivo WhatsApp"');
-  res.status(401).send('Autenticación requerida');
+  res.redirect('/login.html');
 }
 
+app.set('trust proxy', 1); // corre detrás de Nginx en el VPS
+app.use(
+  session({
+    name: 'wa_broadcast_sid',
+    secret: process.env.SESSION_SECRET || 'dev-secret-cambiar-en-produccion',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 1000 * 60 * 60 * 24 * 30, // 30 días
+    },
+  })
+);
 app.use(requireAuth);
 // Guarda el body crudo (necesario para verificar la firma HMAC del
 // webhook de Meta) sin cambiar cómo se usa req.body en el resto de la app.
 app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+function clienteActual(req) {
+  return db.prepare('SELECT * FROM clientes WHERE id = ?').get(req.session.clienteId);
+}
+
+// ==================== AUTENTICACIÓN ====================
+
+app.post('/api/auth/registro', (req, res) => {
+  const { email, password, nombre_negocio } = req.body || {};
+  if (!email || !String(email).trim()) {
+    return res.status(400).json({ error: 'Falta el email' });
+  }
+  if (!password || String(password).length < 8) {
+    return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
+  }
+
+  const emailNormalizado = String(email).trim().toLowerCase();
+  const { hash, salt } = hashPassword(password);
+
+  try {
+    const result = db
+      .prepare(
+        `INSERT INTO clientes (email, password_hash, password_salt, nombre_negocio, estado)
+         VALUES (?, ?, ?, ?, 'pendiente_whatsapp')`
+      )
+      .run(emailNormalizado, hash, salt, nombre_negocio ? String(nombre_negocio).trim() : null);
+
+    req.session.clienteId = result.lastInsertRowid;
+    res.status(201).json({ ok: true });
+  } catch (err) {
+    if (String(err.message).includes('UNIQUE')) {
+      return res.status(409).json({ error: 'Ya existe una cuenta con ese email' });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/login', (req, res) => {
+  const { email, password } = req.body || {};
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Falta email o contraseña' });
+  }
+
+  const cliente = db.prepare('SELECT * FROM clientes WHERE email = ?').get(String(email).trim().toLowerCase());
+  if (!cliente || !verifyPassword(password, cliente.password_hash, cliente.password_salt)) {
+    return res.status(401).json({ error: 'Email o contraseña incorrectos' });
+  }
+
+  req.session.clienteId = cliente.id;
+  res.json({ ok: true });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  req.session.destroy(() => res.json({ ok: true }));
+});
+
+app.get('/api/auth/yo', (req, res) => {
+  const cliente = clienteActual(req);
+  if (!cliente) return res.status(401).json({ error: 'No autenticado' });
+  res.json({
+    cliente: {
+      id: cliente.id,
+      email: cliente.email,
+      nombre_negocio: cliente.nombre_negocio,
+      estado: cliente.estado,
+    },
+  });
+});
+
+// Meta exige una "Valid OAuth Redirect URI" configurada en Facebook
+// Login for Business para el flujo de Embedded Signup, aunque el popup
+// del SDK de JS no redirige visiblemente acá (el `code` se recibe por
+// postMessage — ver public/app.js). Esta página solo cubre ese requisito.
+app.get('/oauth/callback', (req, res) => {
+  res.type('html').send('<!doctype html><html lang="es"><body style="font-family: sans-serif; padding: 2rem;"><p>Podés cerrar esta ventana.</p></body></html>');
+});
+
 // ==================== CONFIG ====================
 
 app.get('/api/config', (req, res) => {
+  const cliente = clienteActual(req);
   res.json({
-    whatsappConfigured: isWhatsAppConfigured(),
+    cliente: { email: cliente.email, nombre_negocio: cliente.nombre_negocio, estado: cliente.estado },
+    // Estricto (sin el fallback al .env global que tiene whatsapp.js para
+    // desarrollo local) — acá nos interesa si ESTE cliente ya conectó.
+    whatsappConfigured: Boolean(cliente.phone_number_id && cliente.access_token),
     webhookVerifyTokenConfigured: Boolean(process.env.WHATSAPP_VERIFY_TOKEN),
     webhookSignatureConfigured: Boolean(process.env.WHATSAPP_APP_SECRET),
+    facebookAppId: process.env.FACEBOOK_APP_ID || null,
+    facebookEmbeddedConfigId: process.env.FACEBOOK_EMBEDDED_CONFIG_ID || null,
   });
+});
+
+// ==================== EMBEDDED SIGNUP (conectar WhatsApp) ====================
+//
+// El frontend abre el popup del SDK de Facebook (ver public/app.js) y,
+// cuando el cliente termina de conectar su WhatsApp Business, junta
+// { code, waba_id, phone_number_id } y los manda acá. Este endpoint:
+//  1. Cambia el `code` por un access token (Graph API OAuth).
+//  2. Suscribe esta app a la WABA para empezar a recibir su webhook
+//     (mismo llamado POST /{waba_id}/subscribed_apps que se hizo a mano
+//     por curl mientras se armaba este flujo).
+//  3. Guarda todo en la fila del cliente logueado.
+
+app.post('/api/clientes/whatsapp/conectar', async (req, res) => {
+  const { code, waba_id, phone_number_id } = req.body || {};
+  if (!code || !waba_id || !phone_number_id) {
+    return res.status(400).json({ error: 'Faltan datos del Embedded Signup (code, waba_id, phone_number_id)' });
+  }
+
+  const appId = process.env.FACEBOOK_APP_ID;
+  const appSecret = process.env.FACEBOOK_APP_SECRET;
+  const apiVersion = process.env.WHATSAPP_API_VERSION || 'v20.0';
+  if (!appId || !appSecret) {
+    return res.status(500).json({ error: 'Falta configurar FACEBOOK_APP_ID / FACEBOOK_APP_SECRET en el .env del servidor' });
+  }
+
+  try {
+    const tokenUrl = `https://graph.facebook.com/${apiVersion}/oauth/access_token?client_id=${encodeURIComponent(appId)}&client_secret=${encodeURIComponent(appSecret)}&code=${encodeURIComponent(code)}`;
+    const tokenRes = await fetch(tokenUrl);
+    const tokenData = await tokenRes.json();
+    if (!tokenRes.ok || !tokenData.access_token) {
+      return res.status(502).json({ error: tokenData.error?.message || 'No se pudo obtener el access token de Meta' });
+    }
+    const accessToken = tokenData.access_token;
+
+    const subRes = await fetch(`https://graph.facebook.com/${apiVersion}/${waba_id}/subscribed_apps`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const subData = await subRes.json();
+    if (!subRes.ok || !subData.success) {
+      return res.status(502).json({ error: subData.error?.message || 'No se pudo suscribir la app a esa cuenta de WhatsApp Business' });
+    }
+
+    db.prepare(
+      `UPDATE clientes SET waba_id = ?, phone_number_id = ?, access_token = ?, estado = 'conectado' WHERE id = ?`
+    ).run(waba_id, phone_number_id, accessToken, req.session.clienteId);
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
 });
 
 // ==================== CONTACTOS ====================
 
 app.get('/api/contactos', (req, res) => {
-  const contactos = db.prepare('SELECT * FROM contactos ORDER BY nombre COLLATE NOCASE ASC').all();
+  const contactos = db
+    .prepare('SELECT * FROM contactos WHERE cliente_id = ? ORDER BY nombre COLLATE NOCASE ASC')
+    .all(req.session.clienteId);
   res.json({ contactos });
 });
 
@@ -103,8 +249,8 @@ app.post('/api/contactos', (req, res) => {
   }
   try {
     const result = db
-      .prepare('INSERT INTO contactos (telefono, nombre) VALUES (?, ?)')
-      .run(normalizado, nombre || null);
+      .prepare('INSERT INTO contactos (telefono, nombre, cliente_id) VALUES (?, ?, ?)')
+      .run(normalizado, nombre || null, req.session.clienteId);
     res.status(201).json({ id: result.lastInsertRowid });
   } catch (err) {
     if (String(err.message).includes('UNIQUE')) {
@@ -115,12 +261,12 @@ app.post('/api/contactos', (req, res) => {
 });
 
 app.delete('/api/contactos', (req, res) => {
-  db.prepare('DELETE FROM contactos').run();
+  db.prepare('DELETE FROM contactos WHERE cliente_id = ?').run(req.session.clienteId);
   res.json({ ok: true });
 });
 
 app.delete('/api/contactos/:id', (req, res) => {
-  db.prepare('DELETE FROM contactos WHERE id = ?').run(req.params.id);
+  db.prepare('DELETE FROM contactos WHERE id = ? AND cliente_id = ?').run(req.params.id, req.session.clienteId);
   res.json({ ok: true });
 });
 
@@ -147,8 +293,8 @@ app.post('/api/contactos/importar', (req, res) => {
     }
 
     const upsert = db.prepare(`
-      INSERT INTO contactos (telefono, nombre) VALUES (?, ?)
-      ON CONFLICT(telefono) DO UPDATE SET nombre = COALESCE(excluded.nombre, contactos.nombre)
+      INSERT INTO contactos (telefono, nombre, cliente_id) VALUES (?, ?, ?)
+      ON CONFLICT(cliente_id, telefono) DO UPDATE SET nombre = COALESCE(excluded.nombre, contactos.nombre)
     `);
 
     let importados = 0;
@@ -165,7 +311,7 @@ app.post('/api/contactos/importar', (req, res) => {
           if (telefonoRaw) invalidos.push(telefonoRaw);
           continue;
         }
-        upsert.run(normalizado, nombreRaw || null);
+        upsert.run(normalizado, nombreRaw || null, req.session.clienteId);
         importados++;
       }
       db.exec('COMMIT');
@@ -194,14 +340,15 @@ app.get('/api/campanas', (req, res) => {
          (SELECT COUNT(*) FROM envios e WHERE e.campana_id = c.id AND e.estado = 'leido') AS leidos,
          (SELECT COUNT(*) FROM envios e WHERE e.campana_id = c.id AND e.estado = 'fallido') AS fallidos
        FROM campanas c
+       WHERE c.cliente_id = ?
        ORDER BY c.id DESC`
     )
-    .all();
+    .all(req.session.clienteId);
   res.json({ campanas });
 });
 
 app.get('/api/campanas/:id', (req, res) => {
-  const campana = db.prepare('SELECT * FROM campanas WHERE id = ?').get(req.params.id);
+  const campana = db.prepare('SELECT * FROM campanas WHERE id = ? AND cliente_id = ?').get(req.params.id, req.session.clienteId);
   if (!campana) return res.status(404).json({ error: 'Campaña no encontrada' });
   const enviados = db
     .prepare(`SELECT COUNT(*) AS n FROM envios WHERE campana_id = ? AND estado IN ('enviado','entregado','leido')`)
@@ -219,6 +366,8 @@ app.get('/api/campanas/:id', (req, res) => {
 });
 
 app.get('/api/campanas/:id/envios', (req, res) => {
+  const campana = db.prepare('SELECT id FROM campanas WHERE id = ? AND cliente_id = ?').get(req.params.id, req.session.clienteId);
+  if (!campana) return res.status(404).json({ error: 'Campaña no encontrada' });
   const envios = db
     .prepare('SELECT * FROM envios WHERE campana_id = ? ORDER BY id ASC')
     .all(req.params.id);
@@ -243,6 +392,7 @@ app.get('/api/campanas/:id/envios', (req, res) => {
  */
 app.post('/api/campanas', (req, res) => {
   const { template_nombre, idioma, contacto_ids, parametros } = req.body || {};
+  const cliente = clienteActual(req);
 
   if (!template_nombre || !String(template_nombre).trim()) {
     return res.status(400).json({ error: 'Falta el nombre de la plantilla' });
@@ -250,14 +400,14 @@ app.post('/api/campanas', (req, res) => {
   if (!Array.isArray(contacto_ids) || contacto_ids.length === 0) {
     return res.status(400).json({ error: 'Elegí al menos un contacto' });
   }
-  if (!isWhatsAppConfigured()) {
-    return res.status(400).json({ error: 'WhatsApp no está configurado en el .env de este proyecto' });
+  if (!isWhatsAppConfigured(cliente.phone_number_id, cliente.access_token)) {
+    return res.status(400).json({ error: 'Todavía no conectaste tu cuenta de WhatsApp Business' });
   }
 
   const placeholders = contacto_ids.map(() => '?').join(',');
   const contactos = db
-    .prepare(`SELECT * FROM contactos WHERE id IN (${placeholders})`)
-    .all(...contacto_ids);
+    .prepare(`SELECT * FROM contactos WHERE id IN (${placeholders}) AND cliente_id = ?`)
+    .all(...contacto_ids, cliente.id);
 
   if (contactos.length === 0) {
     return res.status(400).json({ error: 'No se encontraron los contactos seleccionados' });
@@ -267,20 +417,28 @@ app.post('/api/campanas', (req, res) => {
 
   const result = db
     .prepare(
-      `INSERT INTO campanas (template_nombre, idioma, parametros_json, total_contactos, estado)
-       VALUES (?, ?, ?, ?, 'procesando')`
+      `INSERT INTO campanas (template_nombre, idioma, parametros_json, total_contactos, estado, cliente_id)
+       VALUES (?, ?, ?, ?, 'procesando', ?)`
     )
-    .run(template_nombre.trim(), idioma || 'es', JSON.stringify(parametrosDef), contactos.length);
+    .run(template_nombre.trim(), idioma || 'es', JSON.stringify(parametrosDef), contactos.length, cliente.id);
 
   const campanaId = result.lastInsertRowid;
 
   // Fire-and-forget: procesa en background, el request ya respondió.
-  procesarCampana({ campanaId, template_nombre: template_nombre.trim(), idioma: idioma || 'es', parametrosDef, contactos });
+  procesarCampana({
+    campanaId,
+    template_nombre: template_nombre.trim(),
+    idioma: idioma || 'es',
+    parametrosDef,
+    contactos,
+    phoneNumberId: cliente.phone_number_id,
+    accessToken: cliente.access_token,
+  });
 
   res.status(202).json({ campana_id: campanaId, total: contactos.length });
 });
 
-async function procesarCampana({ campanaId, template_nombre, idioma, parametrosDef, contactos }) {
+async function procesarCampana({ campanaId, template_nombre, idioma, parametrosDef, contactos, phoneNumberId, accessToken }) {
   const delayMs = Number(process.env.ENVIO_DELAY_MS) || 250;
   const insertEnvio = db.prepare(`
     INSERT INTO envios (campana_id, contacto_id, telefono, nombre, estado, error, wa_message_id)
@@ -297,6 +455,8 @@ async function procesarCampana({ campanaId, template_nombre, idioma, parametrosD
       template: template_nombre,
       languageCode: idioma,
       parameters: parametrosResueltos,
+      phoneNumberId,
+      accessToken,
     });
 
     insertEnvio.run(
@@ -347,15 +507,15 @@ app.post('/api/leads/buscar', async (req, res) => {
   }
 
   const insert = db.prepare(`
-    INSERT INTO leads_prospectos (nombre, rubro, direccion, telefono, link_whatsapp, sitio_web)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(telefono) DO NOTHING
+    INSERT INTO leads_prospectos (nombre, rubro, direccion, telefono, link_whatsapp, sitio_web, cliente_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(cliente_id, telefono) DO NOTHING
   `);
 
   let nuevos = 0;
   let duplicados = 0;
   for (const r of busqueda.resultados) {
-    const result = insert.run(r.nombre, r.rubro, r.direccion, r.telefono, r.link_whatsapp, r.sitio_web);
+    const result = insert.run(r.nombre, r.rubro, r.direccion, r.telefono, r.link_whatsapp, r.sitio_web, req.session.clienteId);
     if (result.changes > 0) nuevos++;
     else duplicados++;
   }
@@ -371,8 +531,8 @@ app.post('/api/leads/buscar', async (req, res) => {
 app.get('/api/leads', (req, res) => {
   const { estado } = req.query;
   const leads = estado
-    ? db.prepare('SELECT * FROM leads_prospectos WHERE estado = ? ORDER BY fecha_encontrado DESC').all(estado)
-    : db.prepare('SELECT * FROM leads_prospectos ORDER BY fecha_encontrado DESC').all();
+    ? db.prepare('SELECT * FROM leads_prospectos WHERE cliente_id = ? AND estado = ? ORDER BY fecha_encontrado DESC').all(req.session.clienteId, estado)
+    : db.prepare('SELECT * FROM leads_prospectos WHERE cliente_id = ? ORDER BY fecha_encontrado DESC').all(req.session.clienteId);
   res.json({ leads });
 });
 
@@ -382,8 +542,8 @@ app.patch('/api/leads/:id', (req, res) => {
     return res.status(400).json({ error: 'Falta el estado' });
   }
   const result = db
-    .prepare('UPDATE leads_prospectos SET estado = ? WHERE id = ?')
-    .run(estado.trim(), req.params.id);
+    .prepare('UPDATE leads_prospectos SET estado = ? WHERE id = ? AND cliente_id = ?')
+    .run(estado.trim(), req.params.id, req.session.clienteId);
   if (result.changes === 0) {
     return res.status(404).json({ error: 'Lead no encontrado' });
   }
@@ -412,9 +572,11 @@ const ESTADO_RANK = { enviado: 1, entregado: 2, leido: 3, fallido: 99 };
 const MAPA_ESTADOS_META = { sent: 'enviado', delivered: 'entregado', read: 'leido', failed: 'fallido' };
 
 const insertMensajeEntrante = db.prepare(`
-  INSERT INTO mensajes (telefono, direccion, tipo, texto, wa_message_id, estado, nombre_perfil, leido_por_agente)
-  VALUES (?, 'entrante', ?, ?, ?, 'recibido', ?, 0)
+  INSERT INTO mensajes (telefono, direccion, tipo, texto, wa_message_id, estado, nombre_perfil, leido_por_agente, cliente_id)
+  VALUES (?, 'entrante', ?, ?, ?, 'recibido', ?, 0, ?)
 `);
+
+const clientePorPhoneNumberId = db.prepare('SELECT id FROM clientes WHERE phone_number_id = ?');
 
 function extraerTextoMensaje(msg) {
   switch (msg.type) {
@@ -456,6 +618,13 @@ function procesarWebhookWhatsApp(body) {
     for (const cambio of entrada.changes || []) {
       const valor = cambio.value || {};
 
+      // Un solo webhook de Meta recibe eventos de TODAS las WABAs
+      // suscriptas a la app — hay que resolver a qué cliente pertenece
+      // este evento por el phone_number_id que manda Meta en el payload.
+      const phoneNumberId = valor.metadata?.phone_number_id;
+      const cliente = phoneNumberId ? clientePorPhoneNumberId.get(phoneNumberId) : null;
+      if (!cliente) continue; // evento de un número que no conocemos (o app en dev con otro tester)
+
       const nombresPerfil = {};
       for (const c of valor.contacts || []) {
         if (c.wa_id && c.profile?.name) nombresPerfil[c.wa_id] = c.profile.name;
@@ -464,7 +633,7 @@ function procesarWebhookWhatsApp(body) {
       for (const msg of valor.messages || []) {
         const telefono = msg.from;
         if (!telefono) continue;
-        insertMensajeEntrante.run(telefono, msg.type || 'texto', extraerTextoMensaje(msg), msg.id || null, nombresPerfil[telefono] || null);
+        insertMensajeEntrante.run(telefono, msg.type || 'texto', extraerTextoMensaje(msg), msg.id || null, nombresPerfil[telefono] || null, cliente.id);
       }
 
       for (const estado of valor.statuses || []) {
@@ -518,18 +687,19 @@ app.post('/webhook', (req, res) => {
 // ==================== CONVERSACIONES (respuestas de la gente) ====================
 
 app.get('/api/conversaciones', (req, res) => {
+  const clienteId = req.session.clienteId;
   const telefonos = db
-    .prepare(`SELECT telefono, MAX(creado_en) AS ultimo_en FROM mensajes GROUP BY telefono ORDER BY ultimo_en DESC`)
-    .all();
+    .prepare(`SELECT telefono, MAX(creado_en) AS ultimo_en FROM mensajes WHERE cliente_id = ? GROUP BY telefono ORDER BY ultimo_en DESC`)
+    .all(clienteId);
 
   const conversaciones = telefonos.map(({ telefono }) => {
     const ultimo = db
-      .prepare(`SELECT texto, direccion, estado, creado_en FROM mensajes WHERE telefono = ? ORDER BY creado_en DESC, id DESC LIMIT 1`)
-      .get(telefono);
-    const contacto = db.prepare('SELECT nombre FROM contactos WHERE telefono = ?').get(telefono);
+      .prepare(`SELECT texto, direccion, estado, creado_en FROM mensajes WHERE telefono = ? AND cliente_id = ? ORDER BY creado_en DESC, id DESC LIMIT 1`)
+      .get(telefono, clienteId);
+    const contacto = db.prepare('SELECT nombre FROM contactos WHERE telefono = ? AND cliente_id = ?').get(telefono, clienteId);
     const noLeidos = db
-      .prepare(`SELECT COUNT(*) AS n FROM mensajes WHERE telefono = ? AND direccion = 'entrante' AND leido_por_agente = 0`)
-      .get(telefono).n;
+      .prepare(`SELECT COUNT(*) AS n FROM mensajes WHERE telefono = ? AND cliente_id = ? AND direccion = 'entrante' AND leido_por_agente = 0`)
+      .get(telefono, clienteId).n;
     return {
       telefono,
       nombre: contacto?.nombre || null,
@@ -546,10 +716,11 @@ app.get('/api/conversaciones', (req, res) => {
 
 app.get('/api/conversaciones/:telefono/mensajes', (req, res) => {
   const { telefono } = req.params;
+  const clienteId = req.session.clienteId;
   const mensajes = db
-    .prepare('SELECT * FROM mensajes WHERE telefono = ? ORDER BY creado_en ASC, id ASC')
-    .all(telefono);
-  db.prepare(`UPDATE mensajes SET leido_por_agente = 1 WHERE telefono = ? AND direccion = 'entrante' AND leido_por_agente = 0`).run(telefono);
+    .prepare('SELECT * FROM mensajes WHERE telefono = ? AND cliente_id = ? ORDER BY creado_en ASC, id ASC')
+    .all(telefono, clienteId);
+  db.prepare(`UPDATE mensajes SET leido_por_agente = 1 WHERE telefono = ? AND cliente_id = ? AND direccion = 'entrante' AND leido_por_agente = 0`).run(telefono, clienteId);
   res.json({ mensajes });
 });
 
@@ -562,22 +733,23 @@ app.get('/api/conversaciones/:telefono/mensajes', (req, res) => {
 app.post('/api/conversaciones/:telefono/responder', async (req, res) => {
   const { telefono } = req.params;
   const { texto } = req.body || {};
+  const cliente = clienteActual(req);
   if (!texto || !String(texto).trim()) {
     return res.status(400).json({ error: 'Falta el texto del mensaje' });
   }
-  if (!isWhatsAppConfigured()) {
-    return res.status(400).json({ error: 'WhatsApp no está configurado en el .env de este proyecto' });
+  if (!isWhatsAppConfigured(cliente.phone_number_id, cliente.access_token)) {
+    return res.status(400).json({ error: 'Todavía no conectaste tu cuenta de WhatsApp Business' });
   }
 
   const textoLimpio = texto.trim();
-  const resultado = await sendTextMessage({ to: telefono, body: textoLimpio });
+  const resultado = await sendTextMessage({ to: telefono, body: textoLimpio, phoneNumberId: cliente.phone_number_id, accessToken: cliente.access_token });
 
   const insertado = db
     .prepare(`
-      INSERT INTO mensajes (telefono, direccion, tipo, texto, wa_message_id, estado, error, leido_por_agente)
-      VALUES (?, 'saliente', 'texto', ?, ?, ?, ?, 1)
+      INSERT INTO mensajes (telefono, direccion, tipo, texto, wa_message_id, estado, error, leido_por_agente, cliente_id)
+      VALUES (?, 'saliente', 'texto', ?, ?, ?, ?, 1, ?)
     `)
-    .run(telefono, textoLimpio, resultado.messageId || null, resultado.ok ? 'enviado' : 'fallido', resultado.ok ? null : resultado.error);
+    .run(telefono, textoLimpio, resultado.messageId || null, resultado.ok ? 'enviado' : 'fallido', resultado.ok ? null : resultado.error, cliente.id);
 
   if (!resultado.ok) {
     return res.status(502).json({ error: resultado.error, id: insertado.lastInsertRowid });

@@ -4,6 +4,9 @@
 
 Proyecto standalone (separado de GigantYA) para mandar una plantilla de
 WhatsApp Business aprobada en Meta a una lista propia de contactos.
+Es **multi-cliente**: cada negocio se registra, conecta su propia
+cuenta de WhatsApp Business con el flujo "Embedded Signup" de Meta, y
+ve únicamente sus propios contactos/campañas/conversaciones.
 
 Desarrollado y mantenido por **Code Repair Tech Inc.**, el mismo equipo
 detrás de GigantYA.
@@ -46,19 +49,51 @@ Abrir `http://localhost:4100` (o el puerto que hayas puesto en `.env`).
 - Para desplegar esto en un servidor (VPS), correr con PM2 igual que
   cualquier app Node: `pm2 start server.js --name whatsapp-broadcast`.
 
-## Login
+## Login y cuentas de cliente
 
-Toda la app (API y frontend) pide usuario y contraseña por HTTP Basic
-Auth, definidos en `BASIC_AUTH_USER` / `BASIC_AUTH_PASS` del `.env`.
-Si esas variables están vacías, no pide login (solo para dev local).
+Cada cliente se registra con email/contraseña (`/registro.html`) y
+entra con `/login.html` — sesión por cookie firmada (`SESSION_SECRET`
+en `.env`). Los datos de cada tabla (`contactos`, `campanas`, `envios`,
+`mensajes`, `leads_prospectos`) están aislados por `cliente_id`; ningún
+cliente puede ver los datos de otro.
 
-Si la contraseña incluye `#`, ponela entre comillas en el `.env`
-(`BASIC_AUTH_PASS="algo#raro"`), porque `dotenv` interpreta `#` como
-inicio de comentario en valores sin comillas.
+Al arrancar con la base de datos vacía, se siembra un primer cliente
+("Code Repair Tech") con las credenciales de `BASIC_AUTH_USER`/
+`BASIC_AUTH_PASS` (o una contraseña generada si no están definidas —
+queda impresa una sola vez en el log) y, si `WHATSAPP_PHONE_NUMBER_ID`/
+`WHATSAPP_API_TOKEN` ya están en el `.env`, con WhatsApp ya conectado.
+Ese Basic Auth viejo ya no protege nada por sí mismo — es solo el
+origen de esas credenciales sembradas.
 
-Esto alcanza para uso interno con pocos usuarios, pero no reemplaza
-HTTPS: en el VPS, servite detrás de Nginx con Let's Encrypt para que
-las credenciales no viajen en texto plano.
+No reemplaza HTTPS: en el VPS, servite detrás de Nginx con Let's
+Encrypt para que las contraseñas y cookies no viajen en texto plano.
+
+### Conectar WhatsApp Business (Embedded Signup)
+
+Un cliente nuevo entra con `estado: 'pendiente_whatsapp'` y ve la
+pantalla "Conectar WhatsApp Business" en vez de las pestañas normales.
+Ese botón abre el popup de Meta (SDK de JS) para que autorice su propia
+cuenta — el `code` que devuelve se cambia por un access token en
+`POST /api/clientes/whatsapp/conectar`, que además suscribe la app a
+esa WABA para empezar a recibir su webhook.
+
+Para que este flujo funcione hace falta, del lado de Meta App
+Dashboard:
+
+1. Verificación de Negocio de Code Repair Tech (Meta Business Suite).
+2. App Review pidiendo Advanced Access a `whatsapp_business_management`
+   y `whatsapp_business_messaging` (incluye un video mostrando el flujo
+   funcionando — se puede grabar primero en modo Development con una
+   WABA de test).
+3. Una configuración de Embedded Signup (WhatsApp → Configuration →
+   Embedded Signup) que da el `config_id`.
+4. Una "Valid OAuth Redirect URI" cargada en Facebook Login for
+   Business — usá `https://tu-dominio/oauth/callback` (ya existe esa
+   ruta en el server, es solo una página de cortesía).
+
+Variables nuevas en `.env`: `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`,
+`FACEBOOK_EMBEDDED_CONFIG_ID`, `WHATSAPP_WABA_ID`, `SESSION_SECRET`
+(ver `.env.example` para el detalle de cada una).
 
 ## Prospección de leads (B2B)
 

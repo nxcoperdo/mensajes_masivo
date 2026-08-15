@@ -3,6 +3,25 @@ let contactos = [];
 const seleccionados = new Set();
 let parametros = []; // [{ tipo: 'fijo'|'nombre', valor: '' }]
 
+// ==================== SESIÓN ====================
+// Cualquier fetch que devuelva 401 (sesión vencida o cerrada en otra
+// pestaña) manda directo al login, sin tener que agregar el chequeo en
+// cada llamada del archivo.
+
+const fetchOriginal = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const res = await fetchOriginal(...args);
+  if (res.status === 401) {
+    window.location.href = '/login.html';
+  }
+  return res;
+};
+
+document.getElementById('btnLogout').addEventListener('click', async () => {
+  await fetchOriginal('/api/auth/logout', { method: 'POST' });
+  window.location.href = '/login.html';
+});
+
 // ==================== TEMA (claro/oscuro) ====================
 // Sigue prefers-color-scheme por defecto; el botón permite forzar un
 // modo y lo recuerda en localStorage.
@@ -54,13 +73,30 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
   });
 });
 
-// ==================== CONFIG ====================
+// ==================== CONFIG / CONECTAR WHATSAPP ====================
 
+/**
+ * Carga /api/config, que además de la info de webhook trae el estado
+ * del cliente logueado. Si todavía no conectó su WhatsApp Business,
+ * muestra la pantalla "Conectar WhatsApp" en vez de las pestañas
+ * normales, y devuelve `false` para que el resto del INIT no arranque
+ * (no tiene sentido cargar contactos/conversaciones de un cliente que
+ * todavía no tiene número).
+ */
 async function cargarConfig() {
   const badge = document.getElementById('configBadge');
   try {
     const res = await fetch('/api/config');
     const data = await res.json();
+
+    if (data.cliente.estado !== 'conectado') {
+      document.getElementById('navTabs').classList.add('hidden');
+      document.getElementById('appMain').classList.add('hidden');
+      document.getElementById('pantallaConectar').classList.remove('hidden');
+      await prepararConectarWhatsApp(data.facebookAppId, data.facebookEmbeddedConfigId);
+      return false;
+    }
+
     if (data.whatsappConfigured) {
       badge.textContent = 'WhatsApp configurado ✓';
       badge.className = 'badge badge-ok';
@@ -88,10 +124,109 @@ async function cargarConfig() {
       firmaBadge.textContent = 'Sin validar (opcional)';
       firmaBadge.className = 'badge badge-muted';
     }
+    return true;
   } catch {
     badge.textContent = 'No se pudo conectar al servidor';
     badge.className = 'badge badge-error';
+    return false;
   }
+}
+
+// ---- Embedded Signup (popup de Meta para conectar WhatsApp Business) ----
+
+let datosEmbeddedSignup = null; // { waba_id, phone_number_id }, llega por postMessage
+
+window.addEventListener('message', (event) => {
+  if (typeof event.origin !== 'string' || !event.origin.endsWith('.facebook.com')) return;
+  try {
+    const data = JSON.parse(event.data);
+    if (data.type === 'WA_EMBEDDED_SIGNUP' && data.event === 'FINISH') {
+      datosEmbeddedSignup = data.data;
+    }
+  } catch {
+    // Meta manda otros mensajes por este mismo canal que no son JSON (heartbeats, etc.) — se ignoran.
+  }
+});
+
+function cargarSdkFacebook(appId) {
+  return new Promise((resolve) => {
+    if (window.FB) return resolve();
+    window.fbAsyncInit = () => {
+      FB.init({ appId, xfbml: false, version: 'v20.0' });
+      resolve();
+    };
+    const script = document.createElement('script');
+    script.src = 'https://connect.facebook.net/es_LA/sdk.js';
+    script.async = true;
+    script.defer = true;
+    document.body.appendChild(script);
+  });
+}
+
+async function prepararConectarWhatsApp(appId, configId) {
+  const box = document.getElementById('conectarResultado');
+  const btn = document.getElementById('btnConectarWhatsApp');
+
+  if (!appId || !configId) {
+    box.classList.remove('hidden');
+    box.classList.add('error');
+    box.textContent = 'Falta configurar FACEBOOK_APP_ID / FACEBOOK_EMBEDDED_CONFIG_ID en el servidor.';
+    btn.disabled = true;
+    return;
+  }
+
+  await cargarSdkFacebook(appId);
+
+  btn.addEventListener('click', () => {
+    box.classList.add('hidden');
+    box.classList.remove('error', 'ok');
+    btn.disabled = true;
+    btn.classList.add('is-loading');
+    datosEmbeddedSignup = null;
+
+    FB.login(
+      async (response) => {
+        const code = response.authResponse?.code;
+        if (!code || !datosEmbeddedSignup?.waba_id || !datosEmbeddedSignup?.phone_number_id) {
+          btn.disabled = false;
+          btn.classList.remove('is-loading');
+          if (response.status !== 'unknown') {
+            box.classList.remove('hidden');
+            box.classList.add('error');
+            box.textContent = 'No se completó la conexión con WhatsApp. Probá de nuevo.';
+          }
+          return;
+        }
+
+        try {
+          const res = await fetch('/api/clientes/whatsapp/conectar', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              code,
+              waba_id: datosEmbeddedSignup.waba_id,
+              phone_number_id: datosEmbeddedSignup.phone_number_id,
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'No se pudo conectar WhatsApp');
+          window.location.reload();
+        } catch (err) {
+          btn.disabled = false;
+          btn.classList.remove('is-loading');
+          box.classList.remove('hidden');
+          box.classList.add('error');
+          box.textContent = err.message;
+        }
+      },
+      {
+        config_id: configId,
+        response_type: 'code',
+        override_default_response_type: true,
+        extras: { sessionInfoVersion: 3 },
+      }
+    );
+  });
 }
 
 // ==================== CONTACTOS ====================
@@ -652,8 +787,11 @@ document.getElementById('btnRefrescarConversaciones').addEventListener('click', 
 
 // ==================== INIT ====================
 
-cargarConfig();
-cargarContactos();
-renderParametros();
-cargarConversaciones();
-setInterval(cargarConversaciones, 10000); // refresco periódico para el badge de "no leídos" en la pestaña
+(async () => {
+  const conectado = await cargarConfig();
+  if (!conectado) return; // pantalla "Conectar WhatsApp" ya se mostró — no hay nada más para cargar
+  cargarContactos();
+  renderParametros();
+  cargarConversaciones();
+  setInterval(cargarConversaciones, 10000); // refresco periódico para el badge de "no leídos" en la pestaña
+})();
