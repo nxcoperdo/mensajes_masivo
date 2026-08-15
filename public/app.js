@@ -306,6 +306,42 @@ document.getElementById('btnSeleccionarTodos').addEventListener('click', () => {
   renderContactos();
 });
 
+// ==================== ENVÍO POR LOTES ====================
+// Selecciona los próximos N contactos (reemplaza la selección actual)
+// para mandar campañas cortas una atrás de otra, en vez de una sola
+// campaña gigante — así una campaña larga no queda a mitad de camino
+// si el servidor se reinicia, y es más fácil no pasarse del límite
+// diario de conversaciones que da Meta.
+let loteOffset = 0;
+
+function actualizarLoteInfo() {
+  const info = document.getElementById('loteInfo');
+  if (loteOffset === 0 || contactos.length === 0) {
+    info.textContent = '';
+  } else {
+    info.textContent = `Lote actual: contactos ${loteOffset - seleccionados.size + 1}–${Math.min(loteOffset, contactos.length)} de ${contactos.length}`;
+  }
+}
+
+document.getElementById('btnSeleccionarLote').addEventListener('click', () => {
+  if (contactos.length === 0) return;
+  const tamano = Math.max(1, Number(document.getElementById('tamanoLote').value) || 100);
+  if (loteOffset >= contactos.length) loteOffset = 0; // dio toda la vuelta a la lista, arranca de nuevo
+
+  const lote = contactos.slice(loteOffset, loteOffset + tamano);
+  seleccionados.clear();
+  lote.forEach((c) => seleccionados.add(c.id));
+  loteOffset += lote.length;
+
+  renderContactos();
+  actualizarLoteInfo();
+});
+
+document.getElementById('btnReiniciarLote').addEventListener('click', () => {
+  loteOffset = 0;
+  actualizarLoteInfo();
+});
+
 document.getElementById('btnEliminarTodos').addEventListener('click', async () => {
   if (contactos.length === 0) return;
   if (!confirm(`¿Eliminar los ${contactos.length} contactos? Esta acción no se puede deshacer.`)) return;

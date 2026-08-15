@@ -131,6 +131,17 @@
             <button id="btnEliminarTodos" class="btn btn-sm btn-danger">Eliminar todos</button>
           </div>
         </div>
+        <div class="lote-bar">
+          <label for="tamanoLote" class="sr-only">Tamaño del lote</label>
+          <input type="number" id="tamanoLote" value="100" min="1" />
+          <button type="button" id="btnSeleccionarLote" class="btn btn-sm btn-outline">Seleccionar siguiente lote</button>
+          <button type="button" id="btnReiniciarLote" class="btn btn-sm btn-outline" title="Volver a empezar desde el primer contacto">Reiniciar lote</button>
+          <span id="loteInfo" class="muted"></span>
+        </div>
+        <p class="muted" style="margin-top: 4px;">
+          Mandar en lotes de a poco (ej: 100 a la vez) evita que una campaña larga quede a mitad de camino
+          si el servidor se reinicia, y ayuda a no pasarte del límite diario de conversaciones que te da Meta.
+        </p>
         <div class="table-wrap">
           <table class="tabla">
             <thead>

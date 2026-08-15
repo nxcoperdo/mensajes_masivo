@@ -351,6 +351,16 @@ main {
 }
 .header-actions { display: flex; align-items: center; gap: var(--space-3); }
 
+.lote-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.lote-bar input[type='number'] { width: 80px; flex: none; }
+.lote-bar #loteInfo { font-size: 12.5px; }
+
 .muted { color: var(--color-text-muted); font-size: 13px; }
 
 /* ==================== FORMS ==================== */
