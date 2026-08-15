@@ -831,7 +831,4 @@ app.post('/api/conversaciones/:telefono/responder', async (req, res) => {
 const PORT = process.env.PORT || 4100;
 app.listen(PORT, () => {
   console.log(`Envío masivo de WhatsApp corriendo en http://localhost:${PORT}`);
-  if (!isWhatsAppConfigured()) {
-    console.warn('⚠️  WhatsApp no configurado — copiá .env.example a .env y completá las credenciales.');
-  }
 });
