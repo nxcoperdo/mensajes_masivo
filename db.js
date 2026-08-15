@@ -142,9 +142,21 @@ function tieneIndiceUnicoCompuesto(tabla, columnas) {
   });
 }
 
+/**
+ * `node:sqlite` tiene `PRAGMA foreign_keys` activado por defecto (a
+ * diferencia de la librería C de SQLite, que lo trae apagado). Con eso
+ * activado, un `ALTER TABLE ... RENAME TO` reescribe automáticamente
+ * las cláusulas REFERENCES de OTRAS tablas que apunten a la tabla
+ * renombrada — así fue como la primera corrida de `migrarAUniqueCompuesto`
+ * sobre `contactos` dejó a `envios.contacto_id` apuntando a
+ * `contactos_old`, que se borra dos líneas después, rompiendo todo
+ * INSERT en `envios` con "no such table: main.contactos_old". Por eso
+ * estas migraciones apagan `foreign_keys` mientras dura el rename.
+ */
 function migrarAUniqueCompuesto(tabla, createSql, columnas) {
   if (tieneIndiceUnicoCompuesto(tabla, ['cliente_id', 'telefono'])) return;
   const tablaVieja = `${tabla}_old`;
+  db.exec('PRAGMA foreign_keys = OFF');
   db.exec('BEGIN');
   try {
     db.exec(`ALTER TABLE ${tabla} RENAME TO ${tablaVieja}`);
@@ -155,6 +167,51 @@ function migrarAUniqueCompuesto(tabla, createSql, columnas) {
   } catch (err) {
     db.exec('ROLLBACK');
     throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
+/**
+ * Repara `envios` si ya quedó con `contacto_id REFERENCES contactos_old`
+ * por haber corrido la migración de `contactos` ANTES de este arreglo
+ * (fue el caso en producción). Reconstruye la tabla con la referencia
+ * correcta, sin tocar los datos. En una base que nunca tuvo el bug, el
+ * chequeo de abajo no encuentra "contactos_old" en el DDL y no hace nada.
+ */
+function repararReferenciaEnviosContactos() {
+  const fila = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'envios'`).get();
+  if (!fila || !fila.sql.includes('contactos_old')) return;
+
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN');
+  try {
+    db.exec('ALTER TABLE envios RENAME TO envios_old');
+    db.exec(`
+      CREATE TABLE envios (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        campana_id INTEGER NOT NULL REFERENCES campanas(id) ON DELETE CASCADE,
+        contacto_id INTEGER REFERENCES contactos(id) ON DELETE SET NULL,
+        telefono TEXT NOT NULL,
+        nombre TEXT,
+        estado TEXT NOT NULL,
+        error TEXT,
+        wa_message_id TEXT,
+        creado_en TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    db.exec(`
+      INSERT INTO envios (id, campana_id, contacto_id, telefono, nombre, estado, error, wa_message_id, creado_en)
+      SELECT id, campana_id, contacto_id, telefono, nombre, estado, error, wa_message_id, creado_en FROM envios_old
+    `);
+    db.exec('DROP TABLE envios_old');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_envios_campana ON envios(campana_id)');
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
   }
 }
 
@@ -188,6 +245,8 @@ migrarAUniqueCompuesto(
   )`,
   ['id', 'nombre', 'rubro', 'direccion', 'telefono', 'link_whatsapp', 'sitio_web', 'estado', 'cliente_id', 'fecha_encontrado']
 );
+
+repararReferenciaEnviosContactos();
 
 /**
  * Antes de este cambio, `contactos`/`campanas`/`envios`/`mensajes`/
