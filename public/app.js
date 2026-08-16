@@ -534,7 +534,7 @@ async function cargarCampanas() {
 
   data.campanas.forEach((c) => {
     const tr = document.createElement('tr');
-    const fecha = new Date(c.creado_en).toLocaleString('es-CO');
+    const fecha = parseFechaUTC(c.creado_en).toLocaleString('es-CO');
     tr.innerHTML = `
       <td>${c.id}</td>
       <td>${c.template_nombre}</td>
@@ -682,9 +682,22 @@ function inicialesDe(nombre, telefono) {
   return (nombre || telefono || '?').trim().slice(0, 2).toUpperCase();
 }
 
+/**
+ * SQLite guarda `creado_en` como "YYYY-MM-DD HH:MM:SS" en UTC (lo que
+ * da `datetime('now')`), sin indicador de zona horaria. `new Date()`
+ * de JS interpreta ese formato como hora LOCAL si no le decimos lo
+ * contrario, así que la fecha se ve corrida por el offset horario del
+ * navegador. Convertirlo a formato ISO con "Z" antes de parsear le
+ * aclara que es UTC, y `toLocaleString` ya lo muestra en tu hora local.
+ */
+function parseFechaUTC(fechaTexto) {
+  if (!fechaTexto) return null;
+  return new Date(fechaTexto.replace(' ', 'T') + 'Z');
+}
+
 function formatearHora(fechaTexto) {
   if (!fechaTexto) return '';
-  return new Date(fechaTexto).toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return parseFechaUTC(fechaTexto).toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
 function escapeHtml(str) {
