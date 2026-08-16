@@ -62,7 +62,7 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
       document.getElementById('campanaContactosCount').textContent = seleccionados.size;
     }
     if (btn.dataset.tab === 'historial') {
-      cargarCampanas();
+      abrirHistorial();
     }
     if (btn.dataset.tab === 'leads') {
       cargarLeads();
@@ -517,28 +517,92 @@ async function pollProgresoCampana(campanaId, total, box, btn) {
 
 // ==================== HISTORIAL ====================
 
+let campanas = [];
+const campanasSeleccionadas = new Set();
+
+/**
+ * SQLite guarda las fechas con `datetime('now')`, o sea UTC en formato
+ * 'YYYY-MM-DD HH:MM:SS'. Sin la 'T' y la 'Z' el navegador lo interpreta
+ * como hora LOCAL y muestra la campaña corrida varias horas (y a veces
+ * en otro día). Como las facturas se emiten por período, esto tiene que
+ * estar bien acá y en el PDF (ver `parsearFecha` en facturacion.js).
+ */
+function parsearFechaUtc(texto) {
+  if (!texto) return null;
+  const normalizado = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(texto)
+    ? `${texto.replace(' ', 'T')}Z`
+    : texto;
+  const fecha = new Date(normalizado);
+  return Number.isNaN(fecha.getTime()) ? null : fecha;
+}
+
+const dosDigitos = (valor) => String(valor).padStart(2, '0');
+
+/**
+ * `toLocaleString('es-CO')` devuelve "23/7/2026, 1:05:00 p. m.", que en
+ * la columna de fecha ocupa tres renglones y desborda la tabla. Este
+ * formato fijo entra en uno solo.
+ */
+function formatearFechaHora(texto) {
+  const fecha = parsearFechaUtc(texto);
+  if (!fecha) return '—';
+  return `${formatearFechaCorta(texto)} ${dosDigitos(fecha.getHours())}:${dosDigitos(fecha.getMinutes())}`;
+}
+
+function formatearFechaCorta(texto) {
+  const fecha = parsearFechaUtc(texto);
+  if (!fecha) return '—';
+  return `${dosDigitos(fecha.getDate())}/${dosDigitos(fecha.getMonth() + 1)}/${fecha.getFullYear()}`;
+}
+
+/**
+ * Entrada a la pestaña. La lista de clientes facturables se carga
+ * primero porque define a cuál cliente apuntan las demás llamadas
+ * (`paramsClienteFacturacion`), y solo hace falta una vez por sesión.
+ */
+async function abrirHistorial() {
+  if (!facturacionConfig) await cargarClientesFacturables();
+  await cargarCampanas();
+  cargarFacturas();
+}
+
 async function cargarCampanas() {
-  const res = await fetch('/api/campanas');
+  const res = await fetch(`/api/campanas${paramsClienteFacturacion()}`);
   const data = await res.json();
+  campanas = data.campanas;
+
+  // Una campaña que ya no está no puede seguir seleccionada (pasa al
+  // cambiar de cliente en el selector de admin).
+  const idsVigentes = new Set(campanas.map((c) => c.id));
+  for (const id of campanasSeleccionadas) {
+    if (!idsVigentes.has(id)) campanasSeleccionadas.delete(id);
+  }
+
+  renderCampanas();
+}
+
+function renderCampanas() {
   const tbody = document.getElementById('tablaCampanas');
   tbody.innerHTML = '';
 
-  if (data.campanas.length === 0) {
+  if (campanas.length === 0) {
     tbody.innerHTML = `
-      <tr><td colspan="9">
+      <tr><td colspan="10">
         <div class="empty-state">Todavía no enviaste ninguna campaña.</div>
       </td></tr>
     `;
+    actualizarSeleccionCampanas();
     return;
   }
 
-  data.campanas.forEach((c) => {
+  campanas.forEach((c) => {
     const tr = document.createElement('tr');
-    const fecha = parseFechaUTC(c.creado_en).toLocaleString('es-CO');
+    const checked = campanasSeleccionadas.has(c.id) ? 'checked' : '';
     tr.innerHTML = `
+      <td><input type="checkbox" data-campana="${c.id}" ${checked} aria-label="Seleccionar campaña ${c.id}" /></td>
       <td>${c.id}</td>
-      <td>${c.template_nombre}</td>
-      <td>${fecha}</td>
+      <td>${escapeHtml(c.template_nombre)}</td>
+      <td>${formatearFechaHora(c.creado_en)}</td>
       <td><span class="estado-pill estado-${c.estado}">${c.estado}</span></td>
       <td>${c.enviados}</td>
       <td>${c.entregados}</td>
@@ -548,13 +612,46 @@ async function cargarCampanas() {
     `;
     tbody.appendChild(tr);
   });
+
   tbody.querySelectorAll('[data-ver]').forEach((btn) => {
     btn.addEventListener('click', () => verDetalleCampana(Number(btn.dataset.ver)));
   });
+  tbody.querySelectorAll('[data-campana]').forEach((cb) => {
+    cb.addEventListener('change', (e) => {
+      const id = Number(e.target.dataset.campana);
+      if (e.target.checked) campanasSeleccionadas.add(id);
+      else campanasSeleccionadas.delete(id);
+      actualizarSeleccionCampanas();
+    });
+  });
+
+  actualizarSeleccionCampanas();
 }
 
+function actualizarSeleccionCampanas() {
+  const total = campanasSeleccionadas.size;
+  document.getElementById('campanasSeleccionadasCount').textContent =
+    total === 1 ? '1 seleccionada' : `${total} seleccionadas`;
+
+  const enviadosSeleccionados = campanas
+    .filter((c) => campanasSeleccionadas.has(c.id))
+    .reduce((acumulado, c) => acumulado + (c.enviados || 0), 0);
+
+  for (const id of ['btnEstadisticas', 'btnReportePdf', 'btnGenerarFactura']) {
+    document.getElementById(id).disabled = total === 0;
+  }
+  document.getElementById('btnGenerarFactura').disabled = total === 0 || enviadosSeleccionados === 0;
+}
+
+document.getElementById('btnSeleccionarCampanas').addEventListener('click', () => {
+  const todasSeleccionadas = campanas.length > 0 && campanas.every((c) => campanasSeleccionadas.has(c.id));
+  campanasSeleccionadas.clear();
+  if (!todasSeleccionadas) campanas.forEach((c) => campanasSeleccionadas.add(c.id));
+  renderCampanas();
+});
+
 async function verDetalleCampana(id) {
-  const res = await fetch(`/api/campanas/${id}/envios`);
+  const res = await fetch(`/api/campanas/${id}/envios${paramsClienteFacturacion()}`);
   const data = await res.json();
   document.getElementById('detalleCampana').classList.remove('hidden');
   document.getElementById('detalleCampanaId').textContent = `#${id}`;
@@ -571,6 +668,466 @@ async function verDetalleCampana(id) {
     tbody.appendChild(tr);
   });
 }
+
+// ==================== FACTURACIÓN ====================
+//
+// Regla de cobro (misma que aplica el servidor): se cobra POR MENSAJE
+// ENVIADO. Los fallidos no se cobran; entregado y leído son estados
+// posteriores del mismo mensaje ya enviado y no cambian el importe.
+
+let facturacionConfig = null; // tarifa/moneda/IVA del cliente elegido
+let clientesFacturables = [];
+let esAdminFacturacion = false;
+
+/** Query string con el cliente elegido — vacío cuando es el propio. */
+function paramsClienteFacturacion() {
+  if (!esAdminFacturacion || !facturacionConfig) return '';
+  return `?cliente_id=${encodeURIComponent(facturacionConfig.cliente_id)}`;
+}
+
+function idsSeleccionados() {
+  return Array.from(campanasSeleccionadas).sort((a, b) => a - b);
+}
+
+function mostrarResultadoFacturacion(mensaje, tipo) {
+  const box = document.getElementById('facturacionResultado');
+  box.classList.remove('hidden', 'error', 'ok');
+  if (tipo) box.classList.add(tipo);
+  box.textContent = mensaje;
+}
+
+const MONEDAS_SIN_DECIMALES = new Set(['COP', 'CLP', 'PYG', 'JPY', 'KRW', 'ARS', 'VES']);
+
+function formatearMoneda(valor, moneda = 'COP', conCodigo = true) {
+  const decimales = MONEDAS_SIN_DECIMALES.has(moneda) ? 0 : 2;
+  const numero = Number(valor) || 0;
+  const texto = numero.toLocaleString('es-CO', {
+    minimumFractionDigits: decimales,
+    maximumFractionDigits: decimales,
+  });
+  return `$ ${texto}${conCodigo ? ` ${moneda}` : ''}`;
+}
+
+function formatearTarifa(valor, moneda = 'COP') {
+  const numero = Number(valor) || 0;
+  const decimales = Number.isInteger(numero) ? (MONEDAS_SIN_DECIMALES.has(moneda) ? 0 : 2) : 2;
+  return `$ ${numero.toLocaleString('es-CO', {
+    minimumFractionDigits: decimales,
+    maximumFractionDigits: decimales,
+  })} ${moneda}`;
+}
+
+function formatearNumero(valor) {
+  return (Number(valor) || 0).toLocaleString('es-CO');
+}
+
+function formatearPorcentaje(parte, total) {
+  if (!total) return '—';
+  return `${((parte / total) * 100).toFixed(1).replace('.', ',')}%`;
+}
+
+// ---- Carga inicial: clientes facturables + config del elegido ----
+
+async function cargarClientesFacturables() {
+  const res = await fetch('/api/facturacion/clientes');
+  if (!res.ok) return;
+  const data = await res.json();
+  esAdminFacturacion = Boolean(data.es_admin);
+  clientesFacturables = data.clientes || [];
+
+  const contenedor = document.getElementById('selectorClienteFacturar');
+  const select = document.getElementById('clienteFacturar');
+
+  if (!esAdminFacturacion || clientesFacturables.length <= 1) {
+    contenedor.classList.add('hidden');
+    facturacionConfig = clientesFacturables[0] || null;
+  } else {
+    contenedor.classList.remove('hidden');
+    select.innerHTML = clientesFacturables
+      .map((c) => `<option value="${c.cliente_id}">${escapeHtml(c.nombre_negocio || c.email)}</option>`)
+      .join('');
+    const elegido = facturacionConfig
+      ? clientesFacturables.find((c) => c.cliente_id === facturacionConfig.cliente_id)
+      : null;
+    facturacionConfig = elegido || clientesFacturables[0];
+    select.value = String(facturacionConfig.cliente_id);
+  }
+
+  renderResumenTarifa();
+}
+
+function renderResumenTarifa() {
+  const span = document.getElementById('tarifaResumen');
+  if (!facturacionConfig) {
+    span.textContent = '';
+    return;
+  }
+  const { tarifa_por_mensaje: tarifa, moneda, iva_porcentaje: iva } = facturacionConfig;
+  span.textContent = tarifa > 0
+    ? `Tarifa: ${formatearTarifa(tarifa, moneda)} por mensaje enviado${iva > 0 ? ` · IVA ${iva}%` : ''}`
+    : 'Sin tarifa configurada — definila antes de facturar.';
+}
+
+document.getElementById('clienteFacturar').addEventListener('change', async (e) => {
+  const id = Number(e.target.value);
+  facturacionConfig = clientesFacturables.find((c) => c.cliente_id === id) || facturacionConfig;
+  campanasSeleccionadas.clear();
+  document.getElementById('cardEstadisticas').classList.add('hidden');
+  document.getElementById('detalleCampana').classList.add('hidden');
+  document.getElementById('facturacionResultado').classList.add('hidden');
+  renderResumenTarifa();
+  await cargarCampanas();
+  cargarFacturas();
+});
+
+// ---- Configuración de tarifa ----
+
+document.getElementById('btnConfigTarifa').addEventListener('click', () => {
+  const card = document.getElementById('cardTarifa');
+  card.classList.toggle('hidden');
+  if (card.classList.contains('hidden') || !facturacionConfig) return;
+
+  document.getElementById('tarifaPorMensaje').value = facturacionConfig.tarifa_por_mensaje || '';
+  document.getElementById('tarifaMoneda').value = facturacionConfig.moneda || 'COP';
+  document.getElementById('tarifaIva').value = facturacionConfig.iva_porcentaje || 0;
+  document.getElementById('tarifaNit').value = facturacionConfig.nit || '';
+  document.getElementById('tarifaDireccion').value = facturacionConfig.direccion_fiscal || '';
+  document.getElementById('tarifaCiudad').value = facturacionConfig.ciudad || '';
+  document.getElementById('tarifaTelefono').value = facturacionConfig.telefono_contacto || '';
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+});
+
+document.getElementById('btnCerrarTarifa').addEventListener('click', () => {
+  document.getElementById('cardTarifa').classList.add('hidden');
+});
+
+document.getElementById('formTarifa').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const box = document.getElementById('tarifaResultado');
+  const btn = e.target.querySelector('button[type="submit"]');
+  box.classList.remove('hidden', 'error', 'ok');
+  box.textContent = 'Guardando…';
+  btn.disabled = true;
+
+  try {
+    const res = await fetch('/api/facturacion/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cliente_id: facturacionConfig?.cliente_id,
+        tarifa_por_mensaje: document.getElementById('tarifaPorMensaje').value,
+        moneda: document.getElementById('tarifaMoneda').value,
+        iva_porcentaje: document.getElementById('tarifaIva').value || 0,
+        nit: document.getElementById('tarifaNit').value,
+        direccion_fiscal: document.getElementById('tarifaDireccion').value,
+        ciudad: document.getElementById('tarifaCiudad').value,
+        telefono_contacto: document.getElementById('tarifaTelefono').value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo guardar la tarifa');
+
+    facturacionConfig = data.config;
+    clientesFacturables = clientesFacturables.map((c) =>
+      c.cliente_id === data.config.cliente_id ? data.config : c
+    );
+    renderResumenTarifa();
+    actualizarSeleccionCampanas();
+    box.classList.add('ok');
+    box.textContent = 'Tarifa guardada.';
+  } catch (err) {
+    box.classList.add('error');
+    box.textContent = err.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ---- Estadísticas ----
+
+document.getElementById('btnCerrarEstadisticas').addEventListener('click', () => {
+  document.getElementById('cardEstadisticas').classList.add('hidden');
+});
+
+document.getElementById('btnEstadisticas').addEventListener('click', async () => {
+  const ids = idsSeleccionados();
+  if (ids.length === 0) return;
+
+  const btn = document.getElementById('btnEstadisticas');
+  btn.disabled = true;
+  btn.classList.add('is-loading');
+  try {
+    const res = await fetch('/api/facturacion/estadisticas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cliente_id: facturacionConfig?.cliente_id, campana_ids: ids }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudieron calcular las estadísticas');
+
+    facturacionConfig = data.config;
+    renderResumenTarifa();
+    renderEstadisticas(data.resumen);
+    document.getElementById('facturacionResultado').classList.add('hidden');
+  } catch (err) {
+    mostrarResultadoFacturacion(err.message, 'error');
+  } finally {
+    btn.classList.remove('is-loading');
+    actualizarSeleccionCampanas();
+  }
+});
+
+function renderEstadisticas(resumen) {
+  const { totales, detalle, moneda } = resumen;
+  document.getElementById('cardEstadisticas').classList.remove('hidden');
+
+  const kpis = [
+    { etiqueta: 'Campañas', valor: formatearNumero(totales.campanas), detalle: `${formatearNumero(totales.contactos)} contactos apuntados` },
+    { etiqueta: 'Mensajes enviados', valor: formatearNumero(totales.mensajes_facturables), detalle: 'Base de facturación', acento: 'azul' },
+    { etiqueta: 'Entregados', valor: formatearNumero(totales.entregados), detalle: formatearPorcentaje(totales.entregados, totales.mensajes_facturables) + ' de los enviados' },
+    { etiqueta: 'Leídos', valor: formatearNumero(totales.leidos), detalle: formatearPorcentaje(totales.leidos, totales.mensajes_facturables) + ' de los enviados' },
+    { etiqueta: 'Fallidos', valor: formatearNumero(totales.fallidos), detalle: 'No se cobran', acento: 'rojo' },
+    { etiqueta: 'Total a facturar', valor: formatearMoneda(resumen.total, moneda, false), detalle: `${formatearTarifa(resumen.tarifa, moneda)} × mensaje${resumen.iva_porcentaje > 0 ? ` · IVA ${resumen.iva_porcentaje}%` : ''}`, destacada: true },
+  ];
+
+  document.getElementById('kpiGrid').innerHTML = kpis
+    .map(
+      (kpi) => `
+      <div class="kpi${kpi.destacada ? ' kpi-destacada' : ''}${kpi.acento ? ` kpi-${kpi.acento}` : ''}">
+        <span class="kpi-etiqueta">${escapeHtml(kpi.etiqueta)}</span>
+        <strong class="kpi-valor">${escapeHtml(kpi.valor)}</strong>
+        <span class="kpi-detalle">${escapeHtml(kpi.detalle)}</span>
+      </div>`
+    )
+    .join('');
+
+  const barras = [
+    { etiqueta: 'Enviados', valor: totales.mensajes_facturables, base: totales.intentos, clase: 'azul' },
+    { etiqueta: 'Entregados', valor: totales.entregados, base: totales.mensajes_facturables, clase: 'verde' },
+    { etiqueta: 'Leídos', valor: totales.leidos, base: totales.mensajes_facturables, clase: 'azul-oscuro' },
+    { etiqueta: 'Fallidos', valor: totales.fallidos, base: totales.intentos, clase: 'rojo' },
+  ];
+
+  document.getElementById('embudoStats').innerHTML = barras
+    .map((barra) => {
+      const proporcion = barra.base > 0 ? Math.min(100, (barra.valor / barra.base) * 100) : 0;
+      return `
+      <div class="embudo-fila">
+        <span class="embudo-etiqueta">${barra.etiqueta}</span>
+        <span class="embudo-pista"><span class="embudo-barra embudo-${barra.clase}" style="width: ${proporcion.toFixed(1)}%"></span></span>
+        <span class="embudo-valor">${formatearNumero(barra.valor)} <span class="muted">(${formatearPorcentaje(barra.valor, barra.base)})</span></span>
+      </div>`;
+    })
+    .join('');
+
+  document.getElementById('tablaEstadisticas').innerHTML = detalle
+    .map(
+      (linea) => `
+      <tr>
+        <td>${linea.campana_id}</td>
+        <td>${escapeHtml(linea.template_nombre)}</td>
+        <td>${formatearFechaCorta(linea.creado_en)}</td>
+        <td><strong>${formatearNumero(linea.enviados)}</strong></td>
+        <td>${formatearNumero(linea.entregados)}</td>
+        <td>${formatearNumero(linea.leidos)}</td>
+        <td class="${linea.fallidos > 0 ? 'texto-error' : ''}">${formatearNumero(linea.fallidos)}</td>
+        <td>${formatearMoneda(linea.importe, moneda, false)}</td>
+      </tr>`
+    )
+    .join('');
+
+  document.getElementById('pieEstadisticas').innerHTML = `
+    <tr>
+      <td colspan="3"><strong>TOTAL</strong></td>
+      <td><strong>${formatearNumero(totales.mensajes_facturables)}</strong></td>
+      <td>${formatearNumero(totales.entregados)}</td>
+      <td>${formatearNumero(totales.leidos)}</td>
+      <td>${formatearNumero(totales.fallidos)}</td>
+      <td><strong>${formatearMoneda(resumen.subtotal, moneda, false)}</strong></td>
+    </tr>
+  `;
+
+  document.getElementById('cardEstadisticas').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// ---- Descargas de PDF ----
+
+/**
+ * Los PDF se piden con fetch (no con un `window.open`) para poder
+ * mostrar el mensaje de error del servidor si algo sale mal, en vez de
+ * abrir una pestaña con un JSON crudo.
+ */
+async function descargarPdf(url, nombreSugerido, btn) {
+  btn.disabled = true;
+  btn.classList.add('is-loading');
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'No se pudo generar el PDF');
+    }
+    const blob = await res.blob();
+    const enlace = document.createElement('a');
+    enlace.href = URL.createObjectURL(blob);
+    enlace.download = nombreSugerido;
+    document.body.appendChild(enlace);
+    enlace.click();
+    enlace.remove();
+    URL.revokeObjectURL(enlace.href);
+  } catch (err) {
+    mostrarResultadoFacturacion(err.message, 'error');
+  } finally {
+    btn.classList.remove('is-loading');
+    actualizarSeleccionCampanas();
+  }
+}
+
+document.getElementById('btnReportePdf').addEventListener('click', () => {
+  const ids = idsSeleccionados();
+  if (ids.length === 0) return;
+  const params = new URLSearchParams({ ids: ids.join(',') });
+  if (esAdminFacturacion && facturacionConfig) params.set('cliente_id', facturacionConfig.cliente_id);
+  descargarPdf(
+    `/api/facturacion/reporte.pdf?${params}`,
+    `reporte-campanas-${new Date().toISOString().slice(0, 10)}.pdf`,
+    document.getElementById('btnReportePdf')
+  );
+});
+
+document.getElementById('btnGenerarFactura').addEventListener('click', async () => {
+  const ids = idsSeleccionados();
+  if (ids.length === 0) return;
+
+  if (!facturacionConfig || !(facturacionConfig.tarifa_por_mensaje > 0)) {
+    mostrarResultadoFacturacion('Configurá primero la tarifa por mensaje (botón "Tarifa").', 'error');
+    document.getElementById('btnConfigTarifa').click();
+    return;
+  }
+
+  const enviados = campanas
+    .filter((c) => campanasSeleccionadas.has(c.id))
+    .reduce((acumulado, c) => acumulado + (c.enviados || 0), 0);
+  const estimado = formatearMoneda(
+    enviados * facturacionConfig.tarifa_por_mensaje * (1 + (facturacionConfig.iva_porcentaje || 0) / 100),
+    facturacionConfig.moneda
+  );
+
+  const confirmado = confirm(
+    `¿Emitir factura por ${ids.length} campaña(s)?\n\n` +
+      `Mensajes enviados a cobrar: ${formatearNumero(enviados)}\n` +
+      `Total estimado: ${estimado}\n\n` +
+      'Los mensajes fallidos no se incluyen.'
+  );
+  if (!confirmado) return;
+
+  const notas = prompt('Observaciones para la factura (opcional):', '') ?? '';
+
+  const btn = document.getElementById('btnGenerarFactura');
+  btn.disabled = true;
+  btn.classList.add('is-loading');
+  try {
+    const res = await fetch('/api/facturacion/facturas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cliente_id: facturacionConfig?.cliente_id,
+        campana_ids: ids,
+        notas: notas.trim() || null,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo generar la factura');
+
+    mostrarResultadoFacturacion(
+      `Factura ${data.factura.numero} emitida por ${formatearMoneda(data.factura.total, data.factura.moneda)} ` +
+        `(${formatearNumero(data.factura.total_mensajes)} mensajes enviados). Descargala en la tabla de abajo.`,
+      'ok'
+    );
+    await cargarFacturas();
+    await descargarPdf(
+      `/api/facturacion/facturas/${data.factura.id}/pdf`,
+      `factura-${data.factura.numero}.pdf`,
+      btn
+    );
+  } catch (err) {
+    mostrarResultadoFacturacion(err.message, 'error');
+  } finally {
+    btn.classList.remove('is-loading');
+    actualizarSeleccionCampanas();
+  }
+});
+
+// ---- Facturas emitidas ----
+
+const ESTADOS_FACTURA = ['emitida', 'pagada', 'anulada'];
+
+async function cargarFacturas() {
+  const res = await fetch(`/api/facturacion/facturas${paramsClienteFacturacion()}`);
+  if (!res.ok) return;
+  const data = await res.json();
+  renderFacturas(data.facturas || []);
+}
+
+function renderFacturas(facturas) {
+  const tbody = document.getElementById('tablaFacturas');
+  document.getElementById('totalFacturas').textContent = facturas.length;
+
+  if (facturas.length === 0) {
+    tbody.innerHTML = `
+      <tr><td colspan="8">
+        <div class="empty-state">Todavía no emitiste facturas. Seleccioná campañas arriba y usá "Generar factura".</div>
+      </td></tr>
+    `;
+    return;
+  }
+
+  tbody.innerHTML = facturas
+    .map(
+      (f) => `
+      <tr class="${f.estado === 'anulada' ? 'fila-anulada' : ''}">
+        <td><strong>${escapeHtml(f.numero)}</strong></td>
+        <td>${formatearFechaCorta(f.creado_en)}</td>
+        <td>${f.periodo_desde ? `${formatearFechaCorta(f.periodo_desde)} – ${formatearFechaCorta(f.periodo_hasta)}` : '—'}</td>
+        <td>${f.campana_ids.length}</td>
+        <td>${formatearNumero(f.total_mensajes)}</td>
+        <td><strong>${formatearMoneda(f.total, f.moneda)}</strong></td>
+        <td>
+          <select data-factura-estado="${f.id}" class="estado-factura-select">
+            ${ESTADOS_FACTURA.map((op) => `<option value="${op}" ${op === f.estado ? 'selected' : ''}>${op}</option>`).join('')}
+          </select>
+        </td>
+        <td><button class="btn btn-sm btn-outline" data-factura-pdf="${f.id}" data-numero="${escapeHtml(f.numero)}">Descargar PDF</button></td>
+      </tr>`
+    )
+    .join('');
+
+  tbody.querySelectorAll('[data-factura-pdf]').forEach((btn) => {
+    btn.addEventListener('click', () =>
+      descargarPdf(
+        `/api/facturacion/facturas/${btn.dataset.facturaPdf}/pdf`,
+        `factura-${btn.dataset.numero}.pdf`,
+        btn
+      )
+    );
+  });
+
+  tbody.querySelectorAll('[data-factura-estado]').forEach((select) => {
+    select.addEventListener('change', async (e) => {
+      const res = await fetch(`/api/facturacion/facturas/${e.target.dataset.facturaEstado}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ estado: e.target.value }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        mostrarResultadoFacturacion(data.error || 'No se pudo actualizar la factura', 'error');
+      }
+      cargarFacturas();
+    });
+  });
+}
+
+document.getElementById('btnRefrescarFacturas').addEventListener('click', () => cargarFacturas());
 
 // ==================== LEADS (PROSPECCIÓN B2B) ====================
 

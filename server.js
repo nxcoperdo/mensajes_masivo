@@ -11,6 +11,13 @@ import { parseCsv } from './csv.js';
 import { parseExcel } from './excel.js';
 import { sendTemplate, sendTextMessage, normalizePhone, isWhatsAppConfigured } from './whatsapp.js';
 import { buscarNegocios } from './leads.js';
+import {
+  calcularResumen,
+  datosEmisor,
+  generarFacturaPdf,
+  generarReportePdf,
+  nombreArchivo,
+} from './facturacion.js';
 
 dotenv.config();
 
@@ -169,7 +176,12 @@ app.get('/oauth/callback', (req, res) => {
 app.get('/api/config', (req, res) => {
   const cliente = clienteActual(req);
   res.json({
-    cliente: { email: cliente.email, nombre_negocio: cliente.nombre_negocio, estado: cliente.estado },
+    cliente: {
+      email: cliente.email,
+      nombre_negocio: cliente.nombre_negocio,
+      estado: cliente.estado,
+      es_admin: Boolean(cliente.es_admin),
+    },
     // Estricto (sin el fallback al .env global que tiene whatsapp.js para
     // desarrollo local) — acá nos interesa si ESTE cliente ya conectó.
     whatsappConfigured: Boolean(cliente.phone_number_id && cliente.access_token),
@@ -332,6 +344,11 @@ app.post('/api/contactos/importar', (req, res) => {
 // cuenta cualquier envío exitoso sin importar en qué estado quedó
 // después — 'entregados'/'leidos' son sub-conteos de esos mismos.
 app.get('/api/campanas', (req, res) => {
+  // `cliente_id` solo lo puede usar un admin, para facturarle a sus
+  // clientes desde el historial (ver resolverClienteObjetivo).
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.query.cliente_id);
+  if (error) return res.status(status).json({ error });
+
   const campanas = db
     .prepare(
       `SELECT c.*,
@@ -343,7 +360,7 @@ app.get('/api/campanas', (req, res) => {
        WHERE c.cliente_id = ?
        ORDER BY c.id DESC`
     )
-    .all(req.session.clienteId);
+    .all(cliente.id);
   res.json({ campanas });
 });
 
@@ -366,7 +383,10 @@ app.get('/api/campanas/:id', (req, res) => {
 });
 
 app.get('/api/campanas/:id/envios', (req, res) => {
-  const campana = db.prepare('SELECT id FROM campanas WHERE id = ? AND cliente_id = ?').get(req.params.id, req.session.clienteId);
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.query.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  const campana = db.prepare('SELECT id FROM campanas WHERE id = ? AND cliente_id = ?').get(req.params.id, cliente.id);
   if (!campana) return res.status(404).json({ error: 'Campaña no encontrada' });
   const envios = db
     .prepare('SELECT * FROM envios WHERE campana_id = ? ORDER BY id ASC')
@@ -476,6 +496,349 @@ async function procesarCampana({ campanaId, template_nombre, idioma, parametrosD
 
   db.prepare(`UPDATE campanas SET estado = 'completada' WHERE id = ?`).run(campanaId);
 }
+
+// ==================== FACTURACIÓN ====================
+//
+// Se factura POR MENSAJE ENVIADO: cuenta cada fila de `envios` que no
+// quedó en 'fallido'. Como el webhook de Meta va escalando ese mismo
+// registro a 'entregado' y después a 'leido', los tres estados son
+// "mensajes que se enviaron" y por eso los tres se cobran; 'fallido'
+// nunca se cobra. Ver el bloque de comentarios de facturacion.js.
+const CONDICION_FACTURABLE = `e.estado IN ('enviado','entregado','leido')`;
+
+/**
+ * Resuelve sobre qué cliente se está operando. Por defecto, el logueado.
+ * Un cliente marcado `es_admin` (Code Repair Tech, el dueño de la
+ * instalación) puede pasar `?cliente_id=` para ver y facturar las
+ * campañas de cualquiera de sus clientes — es el único punto donde se
+ * cruza el aislamiento por `cliente_id`, y solo por acá.
+ *
+ * Devuelve `{ error }` en vez de tirar excepción para que cada endpoint
+ * responda el status que corresponda.
+ */
+function resolverClienteObjetivo(req, idPedido) {
+  const propio = clienteActual(req);
+  if (!propio) return { error: 'No autenticado', status: 401 };
+  if (idPedido === undefined || idPedido === null || idPedido === '') return { cliente: propio, propio };
+
+  const id = Number(idPedido);
+  if (!Number.isInteger(id)) return { error: 'cliente_id inválido', status: 400 };
+  if (id === propio.id) return { cliente: propio, propio };
+  if (!propio.es_admin) return { error: 'No tenés permiso para ver los datos de otro cliente', status: 403 };
+
+  const objetivo = db.prepare('SELECT * FROM clientes WHERE id = ?').get(id);
+  if (!objetivo) return { error: 'Cliente no encontrado', status: 404 };
+  return { cliente: objetivo, propio };
+}
+
+/** Datos de facturación (sin credenciales) que se mandan al frontend. */
+function configFacturacion(cliente) {
+  return {
+    cliente_id: cliente.id,
+    nombre_negocio: cliente.nombre_negocio,
+    email: cliente.email,
+    tarifa_por_mensaje: Number(cliente.tarifa_por_mensaje) || 0,
+    moneda: cliente.moneda || 'COP',
+    iva_porcentaje: Number(cliente.iva_porcentaje) || 0,
+    nit: cliente.nit || '',
+    direccion_fiscal: cliente.direccion_fiscal || '',
+    ciudad: cliente.ciudad || '',
+    telefono_contacto: cliente.telefono_contacto || '',
+  };
+}
+
+/**
+ * Trae las campañas pedidas con sus conteos por estado, siempre
+ * acotadas al cliente objetivo (una campaña de otro cliente
+ * simplemente no aparece, aunque manden su id).
+ */
+function campanasParaFacturar(clienteId, ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+  const numericos = ids.map(Number).filter(Number.isInteger);
+  if (numericos.length === 0) return [];
+
+  const marcadores = numericos.map(() => '?').join(',');
+  return db
+    .prepare(
+      `SELECT c.id, c.template_nombre, c.idioma, c.estado, c.total_contactos, c.creado_en,
+         (SELECT COUNT(*) FROM envios e WHERE e.campana_id = c.id AND ${CONDICION_FACTURABLE}) AS enviados,
+         (SELECT COUNT(*) FROM envios e WHERE e.campana_id = c.id AND e.estado IN ('entregado','leido')) AS entregados,
+         (SELECT COUNT(*) FROM envios e WHERE e.campana_id = c.id AND e.estado = 'leido') AS leidos,
+         (SELECT COUNT(*) FROM envios e WHERE e.campana_id = c.id AND e.estado = 'fallido') AS fallidos
+       FROM campanas c
+       WHERE c.cliente_id = ? AND c.id IN (${marcadores})
+       ORDER BY c.id ASC`
+    )
+    .all(clienteId, ...numericos);
+}
+
+function idsDesdeQuery(valor) {
+  if (valor === undefined || valor === null || valor === '') return [];
+  const bruto = Array.isArray(valor) ? valor : String(valor).split(',');
+  return bruto.map((v) => Number(String(v).trim())).filter(Number.isInteger);
+}
+
+/** Lista de clientes facturables — solo para admins (alimenta el selector). */
+app.get('/api/facturacion/clientes', (req, res) => {
+  const propio = clienteActual(req);
+  if (!propio.es_admin) {
+    return res.json({ es_admin: false, clientes: [configFacturacion(propio)] });
+  }
+  const clientes = db
+    .prepare('SELECT * FROM clientes ORDER BY (id = ?) DESC, nombre_negocio COLLATE NOCASE ASC, email ASC')
+    .all(propio.id);
+  res.json({ es_admin: true, clientes: clientes.map(configFacturacion) });
+});
+
+app.get('/api/facturacion/config', (req, res) => {
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.query.cliente_id);
+  if (error) return res.status(status).json({ error });
+  res.json({ config: configFacturacion(cliente), emisor: datosEmisor() });
+});
+
+app.put('/api/facturacion/config', (req, res) => {
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.body?.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  const { tarifa_por_mensaje, moneda, iva_porcentaje, nit, direccion_fiscal, ciudad, telefono_contacto } =
+    req.body || {};
+
+  const tarifa = Number(tarifa_por_mensaje);
+  if (!Number.isFinite(tarifa) || tarifa < 0) {
+    return res.status(400).json({ error: 'La tarifa por mensaje debe ser un número mayor o igual a 0' });
+  }
+  const iva = Number(iva_porcentaje ?? 0);
+  if (!Number.isFinite(iva) || iva < 0 || iva > 100) {
+    return res.status(400).json({ error: 'El IVA debe ser un porcentaje entre 0 y 100' });
+  }
+  const monedaLimpia = String(moneda || 'COP').trim().toUpperCase().slice(0, 6) || 'COP';
+
+  db.prepare(
+    `UPDATE clientes
+     SET tarifa_por_mensaje = ?, moneda = ?, iva_porcentaje = ?, nit = ?, direccion_fiscal = ?, ciudad = ?, telefono_contacto = ?
+     WHERE id = ?`
+  ).run(
+    tarifa,
+    monedaLimpia,
+    iva,
+    nit ? String(nit).trim() : null,
+    direccion_fiscal ? String(direccion_fiscal).trim() : null,
+    ciudad ? String(ciudad).trim() : null,
+    telefono_contacto ? String(telefono_contacto).trim() : null,
+    cliente.id
+  );
+
+  const actualizado = db.prepare('SELECT * FROM clientes WHERE id = ?').get(cliente.id);
+  res.json({ config: configFacturacion(actualizado) });
+});
+
+/** Estadísticas en vivo de las campañas seleccionadas (lo que ve el panel). */
+app.post('/api/facturacion/estadisticas', (req, res) => {
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.body?.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  const campanas = campanasParaFacturar(cliente.id, req.body?.campana_ids);
+  if (campanas.length === 0) {
+    return res.status(400).json({ error: 'Elegí al menos una campaña de este cliente' });
+  }
+
+  const resumen = calcularResumen({
+    campanas,
+    tarifa: Number(cliente.tarifa_por_mensaje) || 0,
+    ivaPorcentaje: Number(cliente.iva_porcentaje) || 0,
+    moneda: cliente.moneda || 'COP',
+  });
+
+  res.json({ resumen, config: configFacturacion(cliente) });
+});
+
+/** Reporte de estadísticas en PDF (no crea factura, es solo el respaldo). */
+app.get('/api/facturacion/reporte.pdf', (req, res) => {
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.query.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  const campanas = campanasParaFacturar(cliente.id, idsDesdeQuery(req.query.ids));
+  if (campanas.length === 0) {
+    return res.status(400).json({ error: 'Elegí al menos una campaña de este cliente' });
+  }
+
+  const resumen = calcularResumen({
+    campanas,
+    tarifa: Number(cliente.tarifa_por_mensaje) || 0,
+    ivaPorcentaje: Number(cliente.iva_porcentaje) || 0,
+    moneda: cliente.moneda || 'COP',
+  });
+
+  try {
+    const pdf = generarReportePdf({ resumen, cliente });
+    const nombre = nombreArchivo(`reporte-${cliente.nombre_negocio || cliente.email}-${new Date().toISOString().slice(0, 10)}`);
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', `attachment; filename="${nombre}.pdf"`);
+    res.send(pdf);
+  } catch (err) {
+    console.error('Error generando el reporte PDF:', err);
+    res.status(500).json({ error: 'No se pudo generar el reporte PDF' });
+  }
+});
+
+/**
+ * Numeración correlativa por año: CRT-2026-0001. Se calcula sobre el
+ * máximo ya emitido de ese año (y no sobre un COUNT) para que anular o
+ * borrar una factura no haga que se repita un número.
+ */
+function siguienteNumeroFactura(prefijo) {
+  const anio = new Date().getUTCFullYear();
+  const raiz = `${prefijo}-${anio}-`;
+  const filas = db
+    .prepare('SELECT numero FROM facturas WHERE numero LIKE ? ORDER BY id DESC')
+    .all(`${raiz}%`);
+
+  let maximo = 0;
+  for (const fila of filas) {
+    const secuencia = Number(fila.numero.slice(raiz.length));
+    if (Number.isInteger(secuencia) && secuencia > maximo) maximo = secuencia;
+  }
+  return `${raiz}${String(maximo + 1).padStart(4, '0')}`;
+}
+
+app.post('/api/facturacion/facturas', (req, res) => {
+  const { cliente, propio, error, status } = resolverClienteObjetivo(req, req.body?.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  const campanas = campanasParaFacturar(cliente.id, req.body?.campana_ids);
+  if (campanas.length === 0) {
+    return res.status(400).json({ error: 'Elegí al menos una campaña de este cliente' });
+  }
+
+  const tarifa = Number(cliente.tarifa_por_mensaje) || 0;
+  if (tarifa <= 0) {
+    return res.status(400).json({ error: 'Configurá primero la tarifa por mensaje de este cliente' });
+  }
+
+  const resumen = calcularResumen({
+    campanas,
+    tarifa,
+    ivaPorcentaje: Number(cliente.iva_porcentaje) || 0,
+    moneda: cliente.moneda || 'COP',
+  });
+
+  if (resumen.totales.mensajes_facturables === 0) {
+    return res.status(400).json({
+      error: 'Las campañas seleccionadas no tienen mensajes enviados, así que no hay nada para cobrar',
+    });
+  }
+
+  const notas = req.body?.notas ? String(req.body.notas).trim().slice(0, 2000) : null;
+
+  // La numeración y el INSERT van juntos en una transacción para que dos
+  // pedidos simultáneos no puedan calcular el mismo número.
+  db.exec('BEGIN IMMEDIATE');
+  let factura;
+  try {
+    const numero = siguienteNumeroFactura(datosEmisor().prefijo);
+    const resultado = db
+      .prepare(
+        `INSERT INTO facturas (
+           numero, cliente_id, emitida_por_id, campana_ids_json, detalle_json, datos_cliente_json,
+           total_mensajes, tarifa_unitaria, subtotal, iva_porcentaje, iva_monto, total, moneda,
+           periodo_desde, periodo_hasta, notas
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        numero,
+        cliente.id,
+        propio.id,
+        JSON.stringify(resumen.detalle.map((linea) => linea.campana_id)),
+        JSON.stringify(resumen.detalle),
+        JSON.stringify(configFacturacion(cliente)),
+        resumen.totales.mensajes_facturables,
+        tarifa,
+        resumen.subtotal,
+        resumen.iva_porcentaje,
+        resumen.iva_monto,
+        resumen.total,
+        resumen.moneda,
+        resumen.periodo_desde,
+        resumen.periodo_hasta,
+        notas
+      );
+    factura = db.prepare('SELECT * FROM facturas WHERE id = ?').get(resultado.lastInsertRowid);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    return res.status(500).json({ error: err.message });
+  }
+
+  res.status(201).json({ factura: serializarFactura(factura) });
+});
+
+function serializarFactura(fila) {
+  return {
+    ...fila,
+    campana_ids: JSON.parse(fila.campana_ids_json || '[]'),
+    detalle: JSON.parse(fila.detalle_json || '[]'),
+    datos_cliente: JSON.parse(fila.datos_cliente_json || '{}'),
+  };
+}
+
+app.get('/api/facturacion/facturas', (req, res) => {
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.query.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  const facturas = db
+    .prepare('SELECT * FROM facturas WHERE cliente_id = ? ORDER BY id DESC')
+    .all(cliente.id);
+  res.json({ facturas: facturas.map(serializarFactura) });
+});
+
+const ESTADOS_FACTURA = new Set(['emitida', 'pagada', 'anulada']);
+
+app.patch('/api/facturacion/facturas/:id', (req, res) => {
+  const propio = clienteActual(req);
+  const factura = db.prepare('SELECT * FROM facturas WHERE id = ?').get(req.params.id);
+  if (!factura || (factura.cliente_id !== propio.id && !propio.es_admin)) {
+    return res.status(404).json({ error: 'Factura no encontrada' });
+  }
+
+  const { estado } = req.body || {};
+  if (!ESTADOS_FACTURA.has(estado)) {
+    return res.status(400).json({ error: 'Estado inválido (emitida, pagada o anulada)' });
+  }
+
+  db.prepare('UPDATE facturas SET estado = ?, pagada_en = ? WHERE id = ?').run(
+    estado,
+    estado === 'pagada' ? new Date().toISOString().slice(0, 19).replace('T', ' ') : null,
+    factura.id
+  );
+  res.json({ factura: serializarFactura(db.prepare('SELECT * FROM facturas WHERE id = ?').get(factura.id)) });
+});
+
+/**
+ * PDF de una factura ya emitida. Se arma con el detalle CONGELADO en la
+ * fila, no volviendo a consultar `envios` — así el documento es
+ * reproducible aunque después cambie la tarifa o se borren campañas.
+ */
+app.get('/api/facturacion/facturas/:id/pdf', (req, res) => {
+  const propio = clienteActual(req);
+  const factura = db.prepare('SELECT * FROM facturas WHERE id = ?').get(req.params.id);
+  if (!factura || (factura.cliente_id !== propio.id && !propio.es_admin)) {
+    return res.status(404).json({ error: 'Factura no encontrada' });
+  }
+
+  try {
+    const pdf = generarFacturaPdf({
+      factura,
+      detalle: JSON.parse(factura.detalle_json || '[]'),
+      datosCliente: JSON.parse(factura.datos_cliente_json || '{}'),
+    });
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', `attachment; filename="${nombreArchivo(`factura-${factura.numero}`)}.pdf"`);
+    res.send(pdf);
+  } catch (err) {
+    console.error('Error generando la factura PDF:', err);
+    res.status(500).json({ error: 'No se pudo generar la factura PDF' });
+  }
+});
 
 // ==================== LEADS (PROSPECCIÓN B2B) ====================
 

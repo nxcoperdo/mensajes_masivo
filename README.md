@@ -25,6 +25,8 @@ detrás de GigantYA.
    una pausa chica entre cada uno para no saturar la API de Meta.
 5. Podés ver el progreso en vivo y el historial de campañas con el
    detalle de quién recibió el mensaje y quién falló (y por qué).
+6. Desde ese mismo historial sacás estadísticas, reportes y facturas en
+   PDF, cobrando por mensaje enviado (ver "Facturación y estadísticas").
 
 ## Instalación
 
@@ -94,6 +96,68 @@ Dashboard:
 Variables nuevas en `.env`: `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`,
 `FACEBOOK_EMBEDDED_CONFIG_ID`, `WHATSAPP_WABA_ID`, `SESSION_SECRET`
 (ver `.env.example` para el detalle de cada una).
+
+## Facturación y estadísticas
+
+En la pestaña **Historial** cada campaña tiene una casilla: marcás una o
+varias y con los botones de abajo sacás estadísticas, un reporte o una
+factura.
+
+### Cómo se cobra
+
+**Se cobra por mensaje ENVIADO** — cada mensaje que WhatsApp aceptó y
+despachó. Concretamente:
+
+- **Se cobra**: todo envío que no quedó en `fallido`. Los estados
+  `enviado`, `entregado` y `leido` son el mismo mensaje en distintos
+  momentos de su vida (el webhook lo va escalando), así que los tres
+  cuentan como un envío cobrable y se cuentan **una sola vez**.
+- **No se cobra**: los `fallido`.
+- Entregado y leído son informativos: aparecen en el reporte como
+  indicadores de rendimiento, pero **no cambian el importe**. Tampoco
+  hace falta tener el webhook configurado para poder facturar.
+
+### Los tres botones
+
+- **Estadísticas y facturación** — panel en pantalla con los totales,
+  el embudo enviados → entregados → leídos → fallidos, el detalle por
+  campaña y el total a cobrar.
+- **Reporte PDF** — el mismo resumen como documento, con los logos de
+  Code Repair Tech. Es el respaldo que le mandás al cliente junto con la
+  factura. No emite nada ni queda guardado.
+- **Generar factura** — emite una factura numerada
+  (`CRT-2026-0001`, correlativa por año), la guarda y descarga el PDF.
+
+Las facturas emitidas quedan listadas al final de la pestaña, con su
+estado (`emitida` / `pagada` / `anulada`) y el botón para volver a
+bajar el PDF cuando quieras.
+
+Una factura emitida **congela** su detalle y los datos fiscales del
+momento: si después cambiás la tarifa, o borrás una campaña, el PDF
+sigue saliendo exactamente igual que el día que la emitiste.
+
+### Tarifa
+
+El botón **Tarifa** define, **por cliente**, el precio por mensaje
+enviado, la moneda, el IVA y los datos fiscales que salen impresos en su
+factura (NIT, dirección, ciudad, teléfono). Los datos del emisor — o
+sea, los tuyos — se configuran una sola vez en el `.env`
+(`EMPRESA_*`, `FACTURA_*`, ver `.env.example`).
+
+### Facturarle a varios clientes
+
+El primer cliente (Code Repair Tech, el que se siembra al arrancar con
+la base vacía) queda marcado como **administrador**. Para él aparece en
+Historial un selector de cliente que le permite ver las campañas de
+cualquier cuenta y facturarle. El resto de los clientes solo ven y
+facturan lo suyo, igual que antes.
+
+### Los PDFs
+
+Se generan en el servidor sin dependencias npm (`pdf.js` + `png.js`,
+usando solo `zlib` de Node), con las fuentes base de PDF y los logos de
+`public/assets/` embebidos. No hace falta instalar nada extra ni tener
+un navegador headless en el VPS.
 
 ## Prospección de leads (B2B)
 

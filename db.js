@@ -98,6 +98,34 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_leads_estado ON leads_prospectos(estado);
+
+  CREATE TABLE IF NOT EXISTS facturas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    numero TEXT NOT NULL UNIQUE,
+    cliente_id INTEGER NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+    emitida_por_id INTEGER REFERENCES clientes(id) ON DELETE SET NULL,
+    campana_ids_json TEXT NOT NULL DEFAULT '[]',
+    -- Copia congelada del detalle por campaña y de los datos fiscales al
+    -- momento de emitir: una factura ya emitida NO puede cambiar de
+    -- valor porque después se edite la tarifa o se borre una campaña.
+    detalle_json TEXT NOT NULL DEFAULT '[]',
+    datos_cliente_json TEXT NOT NULL DEFAULT '{}',
+    total_mensajes INTEGER NOT NULL DEFAULT 0,
+    tarifa_unitaria REAL NOT NULL DEFAULT 0,
+    subtotal REAL NOT NULL DEFAULT 0,
+    iva_porcentaje REAL NOT NULL DEFAULT 0,
+    iva_monto REAL NOT NULL DEFAULT 0,
+    total REAL NOT NULL DEFAULT 0,
+    moneda TEXT NOT NULL DEFAULT 'COP',
+    estado TEXT NOT NULL DEFAULT 'emitida', -- 'emitida' | 'pagada' | 'anulada'
+    periodo_desde TEXT,
+    periodo_hasta TEXT,
+    notas TEXT,
+    creado_en TEXT NOT NULL DEFAULT (datetime('now')),
+    pagada_en TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_facturas_cliente ON facturas(cliente_id, id);
 `);
 
 /**
@@ -123,6 +151,28 @@ agregarColumnaSiFalta('mensajes', 'cliente_id INTEGER');
 agregarColumnaSiFalta('leads_prospectos', 'cliente_id INTEGER');
 agregarColumnaSiFalta('mensajes', 'media_id TEXT');
 agregarColumnaSiFalta('mensajes', 'media_mime_type TEXT');
+
+/**
+ * Facturación: qué se le cobra a cada cliente y con qué datos sale su
+ * factura. La tarifa se cobra POR MENSAJE ENVIADO (ver facturacion.js)
+ * y vive en la fila del cliente para que cada uno pueda tener un precio
+ * distinto negociado.
+ */
+agregarColumnaSiFalta('clientes', 'tarifa_por_mensaje REAL NOT NULL DEFAULT 0');
+agregarColumnaSiFalta('clientes', "moneda TEXT NOT NULL DEFAULT 'COP'");
+agregarColumnaSiFalta('clientes', 'iva_porcentaje REAL NOT NULL DEFAULT 0');
+agregarColumnaSiFalta('clientes', 'nit TEXT');
+agregarColumnaSiFalta('clientes', 'direccion_fiscal TEXT');
+agregarColumnaSiFalta('clientes', 'ciudad TEXT');
+agregarColumnaSiFalta('clientes', 'telefono_contacto TEXT');
+/**
+ * Code Repair Tech (el cliente sembrado) necesita poder ver y facturar
+ * las campañas de SUS clientes — sin esto, cada cuenta solo se puede
+ * facturar a sí misma. Es el único permiso que cruza el aislamiento por
+ * `cliente_id`, y siempre pasa por `resolverClienteObjetivo()` en
+ * server.js.
+ */
+agregarColumnaSiFalta('clientes', 'es_admin INTEGER NOT NULL DEFAULT 0');
 
 /**
  * `contactos` y `leads_prospectos` tenían `UNIQUE(telefono)` a nivel de
@@ -271,8 +321,8 @@ function sembrarClienteInicial() {
 
   const result = db
     .prepare(
-      `INSERT INTO clientes (email, password_hash, password_salt, nombre_negocio, waba_id, phone_number_id, access_token, estado)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO clientes (email, password_hash, password_salt, nombre_negocio, waba_id, phone_number_id, access_token, estado, es_admin)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`
     )
     .run(
       email,
@@ -294,5 +344,20 @@ function sembrarClienteInicial() {
 }
 
 sembrarClienteInicial();
+
+/**
+ * En bases que ya existían antes de la facturación, `es_admin` nace en 0
+ * para todos y nadie podría facturarle a nadie. El primer cliente
+ * (Code Repair Tech, el que sembró `sembrarClienteInicial`) es el dueño
+ * de la instalación, así que se lo promueve una única vez.
+ */
+function asegurarAdministrador() {
+  const hayAdmin = db.prepare('SELECT COUNT(*) AS n FROM clientes WHERE es_admin = 1').get().n > 0;
+  if (hayAdmin) return;
+  const primero = db.prepare('SELECT id FROM clientes ORDER BY id ASC LIMIT 1').get();
+  if (primero) db.prepare('UPDATE clientes SET es_admin = 1 WHERE id = ?').run(primero.id);
+}
+
+asegurarAdministrador();
 
 export default db;
