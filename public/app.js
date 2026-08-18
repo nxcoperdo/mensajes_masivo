@@ -203,8 +203,13 @@ async function prepararBotonConectar(btnId, onSuccess) {
     btn.classList.add('is-loading');
     datosEmbeddedSignup = null;
 
+    // El SDK de Facebook valida en runtime que este callback sea una
+    // función común (no async) — un callback `async` tira "Expression is
+    // of type asyncfunction, not function" antes de llegar a ejecutarlo.
+    // Por eso acá adentro se llama a una función async aparte en vez de
+    // marcar este callback como async directamente.
     FB.login(
-      async (response) => {
+      (response) => {
         const code = response.authResponse?.code;
         if (!code || !datosEmbeddedSignup?.waba_id || !datosEmbeddedSignup?.phone_number_id) {
           btn.disabled = false;
@@ -217,26 +222,28 @@ async function prepararBotonConectar(btnId, onSuccess) {
           return;
         }
 
-        try {
-          const res = await fetch('/api/clientes/whatsapp/conectar', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              code,
-              waba_id: datosEmbeddedSignup.waba_id,
-              phone_number_id: datosEmbeddedSignup.phone_number_id,
-            }),
-          });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || 'No se pudo conectar WhatsApp');
-          onSuccess();
-        } catch (err) {
-          btn.disabled = false;
-          btn.classList.remove('is-loading');
-          box.classList.remove('hidden');
-          box.classList.add('error');
-          box.textContent = err.message;
-        }
+        (async () => {
+          try {
+            const res = await fetch('/api/clientes/whatsapp/conectar', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                code,
+                waba_id: datosEmbeddedSignup.waba_id,
+                phone_number_id: datosEmbeddedSignup.phone_number_id,
+              }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'No se pudo conectar WhatsApp');
+            onSuccess();
+          } catch (err) {
+            btn.disabled = false;
+            btn.classList.remove('is-loading');
+            box.classList.remove('hidden');
+            box.classList.add('error');
+            box.textContent = err.message;
+          }
+        })();
       },
       {
         config_id: configId,
