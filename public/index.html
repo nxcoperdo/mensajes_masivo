@@ -446,6 +446,21 @@
         </div>
       </div>
 
+      <div class="card">
+        <div class="card-header">
+          <h2>Números de WhatsApp conectados</h2>
+          <button type="button" id="btnAgregarNumero" class="btn btn-sm btn-outline">+ Agregar número</button>
+        </div>
+        <p class="muted">
+          El número marcado como activo es el que se usa para mandar campañas y responder chats.
+          Si conectaste más de un número en la misma cuenta de Meta, elegí acá cuál usar.
+        </p>
+        <div id="listaNumeros" class="lista-numeros">
+          <div class="empty-state">Cargando…</div>
+        </div>
+        <div id="numerosResultado" class="result-box hidden"></div>
+      </div>
+
       <div class="card webhook-chat-card">
         <div class="card-header">
           <h2>Conversaciones (<span id="totalConversaciones">0</span>)</h2>

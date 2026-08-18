@@ -126,7 +126,43 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_facturas_cliente ON facturas(cliente_id, id);
+
+  -- Todos los números de WhatsApp que un cliente conectó alguna vez desde
+  -- Meta (Embedded Signup se puede repetir para agregar más números de la
+  -- misma WABA). clientes.phone_number_id/waba_id/access_token sigue
+  -- siendo el número ACTIVO (de ahí sale todo envío); esta tabla es el
+  -- listado completo para poder elegir cuál activar.
+  CREATE TABLE IF NOT EXISTS whatsapp_numeros (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cliente_id INTEGER NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+    waba_id TEXT NOT NULL,
+    phone_number_id TEXT NOT NULL,
+    access_token TEXT NOT NULL,
+    etiqueta TEXT,
+    creado_en TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(cliente_id, phone_number_id)
+  );
 `);
+
+/**
+ * Clientes que ya tenían un número conectado ANTES de que existiera
+ * `whatsapp_numeros` no aparecerían en el listado (aunque siguen
+ * funcionando, porque siguen siendo el número activo en `clientes`).
+ * Esto los siembra una sola vez para que también aparezcan como opción
+ * elegible.
+ */
+function sembrarNumerosExistentes() {
+  const clientes = db
+    .prepare(`SELECT id, waba_id, phone_number_id, access_token FROM clientes WHERE phone_number_id IS NOT NULL AND access_token IS NOT NULL`)
+    .all();
+  const insertar = db.prepare(
+    `INSERT OR IGNORE INTO whatsapp_numeros (cliente_id, waba_id, phone_number_id, access_token, etiqueta)
+     VALUES (?, ?, ?, ?, ?)`
+  );
+  for (const c of clientes) {
+    insertar.run(c.id, c.waba_id || '', c.phone_number_id, c.access_token, null);
+  }
+}
 
 /**
  * `node:sqlite` no versiona migraciones — este proyecto ya tenía datos
@@ -344,6 +380,7 @@ function sembrarClienteInicial() {
 }
 
 sembrarClienteInicial();
+sembrarNumerosExistentes();
 
 /**
  * En bases que ya existían antes de la facturación, `es_admin` nace en 0

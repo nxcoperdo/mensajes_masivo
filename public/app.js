@@ -69,6 +69,7 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
     }
     if (btn.dataset.tab === 'webhook') {
       cargarConversaciones();
+      cargarNumeros();
     }
   });
 });
@@ -89,13 +90,19 @@ async function cargarConfig() {
     const res = await fetch('/api/config');
     const data = await res.json();
 
+    datosFacebookApp = { appId: data.facebookAppId, configId: data.facebookEmbeddedConfigId };
+
     if (data.cliente.estado !== 'conectado') {
       document.getElementById('navTabs').classList.add('hidden');
       document.getElementById('appMain').classList.add('hidden');
       document.getElementById('pantallaConectar').classList.remove('hidden');
-      await prepararConectarWhatsApp(data.facebookAppId, data.facebookEmbeddedConfigId);
+      await prepararBotonConectar('btnConectarWhatsApp', () => window.location.reload());
       return false;
     }
+
+    await prepararBotonConectar('btnAgregarNumero', () => {
+      window.location.reload();
+    });
 
     if (data.whatsappConfigured) {
       badge.textContent = 'WhatsApp configurado ✓';
@@ -134,6 +141,7 @@ async function cargarConfig() {
 
 // ---- Embedded Signup (popup de Meta para conectar WhatsApp Business) ----
 
+let datosFacebookApp = null; // { appId, configId }, viene de /api/config
 let datosEmbeddedSignup = null; // { waba_id, phone_number_id }, llega por postMessage
 
 window.addEventListener('message', (event) => {
@@ -163,9 +171,20 @@ function cargarSdkFacebook(appId) {
   });
 }
 
-async function prepararConectarWhatsApp(appId, configId) {
-  const box = document.getElementById('conectarResultado');
-  const btn = document.getElementById('btnConectarWhatsApp');
+/**
+ * Cablea un botón (el de la pantalla inicial "Conectar WhatsApp" o el de
+ * "+ Agregar número" en Configuración) al popup de Embedded Signup de
+ * Meta. Ambos comparten la misma lógica: abrir el popup, juntar
+ * {code, waba_id, phone_number_id} y mandarlo al backend. `onSuccess` es
+ * lo único que cambia según desde dónde se llame.
+ */
+async function prepararBotonConectar(btnId, onSuccess) {
+  const btn = document.getElementById(btnId);
+  if (!btn) return; // el botón de agregar número solo existe si ya pasamos la pantalla inicial
+
+  const boxId = btnId === 'btnConectarWhatsApp' ? 'conectarResultado' : 'numerosResultado';
+  const box = document.getElementById(boxId);
+  const { appId, configId } = datosFacebookApp || {};
 
   if (!appId || !configId) {
     box.classList.remove('hidden');
@@ -210,7 +229,7 @@ async function prepararConectarWhatsApp(appId, configId) {
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || 'No se pudo conectar WhatsApp');
-          window.location.reload();
+          onSuccess();
         } catch (err) {
           btn.disabled = false;
           btn.classList.remove('is-loading');
@@ -226,6 +245,54 @@ async function prepararConectarWhatsApp(appId, configId) {
         extras: { sessionInfoVersion: 3 },
       }
     );
+  });
+}
+
+// ---- Selector de número activo (Configuración > pestaña Webhook) ----
+
+async function cargarNumeros() {
+  const cont = document.getElementById('listaNumeros');
+  if (!cont) return;
+
+  const res = await fetch('/api/whatsapp/numeros');
+  const data = await res.json();
+
+  if (!data.numeros || data.numeros.length === 0) {
+    cont.innerHTML = '<div class="empty-state">Todavía no conectaste ningún número.</div>';
+    return;
+  }
+
+  cont.innerHTML = '';
+  data.numeros.forEach((n) => {
+    const row = document.createElement('div');
+    row.className = 'numero-row' + (n.activo ? ' numero-activo' : '');
+    row.innerHTML = `
+      <div>
+        <strong>${n.etiqueta || n.phone_number_id}</strong>
+        ${n.etiqueta ? `<span class="muted">· ${n.phone_number_id}</span>` : ''}
+      </div>
+      ${n.activo
+        ? '<span class="badge badge-ok">Activo ✓</span>'
+        : `<button type="button" class="btn btn-sm btn-outline" data-activar="${n.id}">Usar este número</button>`}
+    `;
+    cont.appendChild(row);
+  });
+
+  cont.querySelectorAll('[data-activar]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = 'Activando…';
+      try {
+        const res = await fetch(`/api/whatsapp/numeros/${btn.dataset.activar}/activar`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'No se pudo activar el número');
+        await cargarNumeros();
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Usar este número';
+        alert(err.message);
+      }
+    });
   });
 }
 

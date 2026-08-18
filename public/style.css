@@ -690,6 +690,28 @@ input[type='file'] {
   word-break: break-all;
 }
 
+/* ==================== NÚMEROS DE WHATSAPP (SELECTOR DE ACTIVO) ==================== */
+
+.lista-numeros {
+  margin-top: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.numero-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface-2);
+  border-radius: var(--radius-md);
+  flex-wrap: wrap;
+}
+.numero-row.numero-activo {
+  outline: 1px solid var(--color-success, #25d366);
+}
+
 /* ==================== WEBHOOK: CONVERSACIONES (CHAT) ==================== */
 
 .webhook-chat-card { padding-bottom: var(--space-4); }

@@ -234,14 +234,70 @@ app.post('/api/clientes/whatsapp/conectar', async (req, res) => {
       return res.status(502).json({ error: subData.error?.message || 'No se pudo suscribir la app a esa cuenta de WhatsApp Business' });
     }
 
+    // Nombre lindo para mostrar en el selector de números (best-effort: si
+    // falla, se guarda sin etiqueta y el listado cae al phone_number_id).
+    let etiqueta = null;
+    try {
+      const infoRes = await fetch(`https://graph.facebook.com/${apiVersion}/${phone_number_id}?fields=display_phone_number,verified_name`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const infoData = await infoRes.json();
+      if (infoRes.ok) {
+        etiqueta = [infoData.verified_name, infoData.display_phone_number].filter(Boolean).join(' · ') || null;
+      }
+    } catch {
+      // no bloquea la conexión si Graph no responde este dato opcional
+    }
+
     db.prepare(
-      `UPDATE clientes SET waba_id = ?, phone_number_id = ?, access_token = ?, estado = 'conectado' WHERE id = ?`
-    ).run(waba_id, phone_number_id, accessToken, req.session.clienteId);
+      `INSERT INTO whatsapp_numeros (cliente_id, waba_id, phone_number_id, access_token, etiqueta)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(cliente_id, phone_number_id) DO UPDATE SET
+         waba_id = excluded.waba_id, access_token = excluded.access_token, etiqueta = excluded.etiqueta`
+    ).run(req.session.clienteId, waba_id, phone_number_id, accessToken, etiqueta);
+
+    // El primer número que conecta una cuenta queda activo automáticamente
+    // (comportamiento anterior). Si ya tenía otro activo, este se agrega a
+    // la lista pero el activo no cambia solo — el cliente lo elige a mano
+    // en Configuración (POST /api/whatsapp/numeros/:id/activar).
+    const cliente = clienteActual(req);
+    if (!cliente.phone_number_id) {
+      db.prepare(
+        `UPDATE clientes SET waba_id = ?, phone_number_id = ?, access_token = ?, estado = 'conectado' WHERE id = ?`
+      ).run(waba_id, phone_number_id, accessToken, req.session.clienteId);
+    }
 
     res.json({ ok: true });
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
+});
+
+// Lista de todos los números que este cliente conectó alguna vez, marcando
+// cuál es el activo (el que usan los envíos ahora mismo).
+app.get('/api/whatsapp/numeros', (req, res) => {
+  const cliente = clienteActual(req);
+  const numeros = db
+    .prepare('SELECT id, waba_id, phone_number_id, etiqueta, creado_en FROM whatsapp_numeros WHERE cliente_id = ? ORDER BY creado_en ASC')
+    .all(req.session.clienteId);
+  res.json({
+    numeros: numeros.map((n) => ({ ...n, activo: n.phone_number_id === cliente.phone_number_id })),
+  });
+});
+
+// Cambia cuál de los números ya conectados es el activo — todo envío
+// nuevo (campañas y respuestas de chat) sale por este a partir de ahora.
+app.post('/api/whatsapp/numeros/:id/activar', (req, res) => {
+  const numero = db
+    .prepare('SELECT * FROM whatsapp_numeros WHERE id = ? AND cliente_id = ?')
+    .get(req.params.id, req.session.clienteId);
+  if (!numero) return res.status(404).json({ error: 'Número no encontrado' });
+
+  db.prepare(
+    `UPDATE clientes SET waba_id = ?, phone_number_id = ?, access_token = ?, estado = 'conectado' WHERE id = ?`
+  ).run(numero.waba_id, numero.phone_number_id, numero.access_token, req.session.clienteId);
+
+  res.json({ ok: true });
 });
 
 // ==================== CONTACTOS ====================
