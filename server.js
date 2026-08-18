@@ -300,7 +300,7 @@ app.post('/api/whatsapp/numeros/manual', async (req, res) => {
   const phoneNumberId = String(phone_number_id).trim();
 
   const cliente = clienteActual(req);
-  if (!cliente.waba_id || !cliente.access_token) {
+  if (!cliente.access_token) {
     return res.status(400).json({ error: 'Todavía no tenés ningún número conectado — usá "Conectar WhatsApp Business" primero' });
   }
 
@@ -311,9 +311,15 @@ app.post('/api/whatsapp/numeros/manual', async (req, res) => {
     });
     const infoData = await infoRes.json();
     if (!infoRes.ok) {
-      return res.status(400).json({ error: infoData.error?.message || 'No se pudo verificar ese phone_number_id con Meta' });
+      return res.status(400).json({ error: infoData.error?.message || 'No se pudo verificar ese phone_number_id con Meta (¿el número está en otra cuenta de WhatsApp Business?)' });
     }
-    if (infoData.whatsapp_business_account?.id && infoData.whatsapp_business_account.id !== cliente.waba_id) {
+    // El WABA "real" del número lo devuelve Graph, no hace falta que
+    // clientes.waba_id ya esté seteado (algunas cuentas viejas lo tienen
+    // vacío porque nunca pasaron por Embedded Signup). Si clientes.waba_id
+    // SÍ está seteado, lo usamos para detectar que el número pertenece a
+    // otra cuenta antes de mezclarlo con los demás.
+    const wabaId = infoData.whatsapp_business_account?.id || cliente.waba_id || '';
+    if (cliente.waba_id && infoData.whatsapp_business_account?.id && infoData.whatsapp_business_account.id !== cliente.waba_id) {
       return res.status(400).json({ error: 'Ese número pertenece a otra cuenta de WhatsApp Business (WABA) — para ese caso hay que usar "Conectar WhatsApp Business"' });
     }
 
@@ -323,7 +329,7 @@ app.post('/api/whatsapp/numeros/manual', async (req, res) => {
       `INSERT INTO whatsapp_numeros (cliente_id, waba_id, phone_number_id, access_token, etiqueta)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(cliente_id, phone_number_id) DO UPDATE SET etiqueta = excluded.etiqueta`
-    ).run(req.session.clienteId, cliente.waba_id, phoneNumberId, cliente.access_token, etiqueta);
+    ).run(req.session.clienteId, wabaId, phoneNumberId, cliente.access_token, etiqueta);
 
     res.json({ ok: true });
   } catch (err) {
