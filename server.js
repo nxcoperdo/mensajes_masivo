@@ -306,21 +306,17 @@ app.post('/api/whatsapp/numeros/manual', async (req, res) => {
 
   const apiVersion = process.env.WHATSAPP_API_VERSION || 'v20.0';
   try {
-    const infoRes = await fetch(`https://graph.facebook.com/${apiVersion}/${phoneNumberId}?fields=display_phone_number,verified_name,whatsapp_business_account`, {
+    // Solo confirma que el ID existe y que el token del cliente tiene
+    // acceso — no hay forma de pedirle a Graph "a qué WABA pertenece este
+    // número" desde el nodo del número (whatsapp_business_account no es
+    // un campo válido acá), así que se asume la misma WABA que ya tenía
+    // el cliente, que es la premisa de este endpoint.
+    const infoRes = await fetch(`https://graph.facebook.com/${apiVersion}/${phoneNumberId}?fields=display_phone_number,verified_name`, {
       headers: { Authorization: `Bearer ${cliente.access_token}` },
     });
     const infoData = await infoRes.json();
     if (!infoRes.ok) {
       return res.status(400).json({ error: infoData.error?.message || 'No se pudo verificar ese phone_number_id con Meta (¿el número está en otra cuenta de WhatsApp Business?)' });
-    }
-    // El WABA "real" del número lo devuelve Graph, no hace falta que
-    // clientes.waba_id ya esté seteado (algunas cuentas viejas lo tienen
-    // vacío porque nunca pasaron por Embedded Signup). Si clientes.waba_id
-    // SÍ está seteado, lo usamos para detectar que el número pertenece a
-    // otra cuenta antes de mezclarlo con los demás.
-    const wabaId = infoData.whatsapp_business_account?.id || cliente.waba_id || '';
-    if (cliente.waba_id && infoData.whatsapp_business_account?.id && infoData.whatsapp_business_account.id !== cliente.waba_id) {
-      return res.status(400).json({ error: 'Ese número pertenece a otra cuenta de WhatsApp Business (WABA) — para ese caso hay que usar "Conectar WhatsApp Business"' });
     }
 
     const etiqueta = [infoData.verified_name, infoData.display_phone_number].filter(Boolean).join(' · ') || null;
@@ -329,7 +325,7 @@ app.post('/api/whatsapp/numeros/manual', async (req, res) => {
       `INSERT INTO whatsapp_numeros (cliente_id, waba_id, phone_number_id, access_token, etiqueta)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(cliente_id, phone_number_id) DO UPDATE SET etiqueta = excluded.etiqueta`
-    ).run(req.session.clienteId, wabaId, phoneNumberId, cliente.access_token, etiqueta);
+    ).run(req.session.clienteId, cliente.waba_id || '', phoneNumberId, cliente.access_token, etiqueta);
 
     res.json({ ok: true });
   } catch (err) {
