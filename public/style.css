@@ -711,6 +711,25 @@ input[type='file'] {
 .numero-row.numero-activo {
   outline: 1px solid var(--color-success, #25d366);
 }
+.numero-manual {
+  margin-top: var(--space-4);
+}
+.numero-manual summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+.numero-manual-form {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  flex-wrap: wrap;
+}
+.numero-manual-form input {
+  flex: 1;
+  min-width: 200px;
+}
 
 /* ==================== WEBHOOK: CONVERSACIONES (CHAT) ==================== */
 

@@ -303,6 +303,38 @@ async function cargarNumeros() {
   });
 }
 
+const formNumeroManual = document.getElementById('formNumeroManual');
+if (formNumeroManual) {
+  formNumeroManual.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = document.getElementById('inputNumeroManual');
+    const btn = formNumeroManual.querySelector('button[type="submit"]');
+    const box = document.getElementById('numerosResultado');
+
+    btn.disabled = true;
+    box.classList.add('hidden');
+    box.classList.remove('error', 'ok');
+
+    try {
+      const res = await fetch('/api/whatsapp/numeros/manual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone_number_id: input.value.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'No se pudo agregar el número');
+      input.value = '';
+      await cargarNumeros();
+    } catch (err) {
+      box.classList.remove('hidden');
+      box.classList.add('error');
+      box.textContent = err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
 // ==================== CONTACTOS ====================
 
 async function cargarContactos() {

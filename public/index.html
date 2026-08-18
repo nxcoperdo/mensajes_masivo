@@ -459,6 +459,19 @@
           <div class="empty-state">Cargando…</div>
         </div>
         <div id="numerosResultado" class="result-box hidden"></div>
+
+        <details class="numero-manual">
+          <summary>Agregar a mano un número de la misma cuenta de Meta</summary>
+          <p class="muted">
+            Si el número nuevo ya está en la MISMA cuenta de WhatsApp Business (WABA) que la que ya conectaste,
+            no hace falta repetir el popup de Meta: pegá acá el <code>phone_number_id</code> (Meta App Dashboard
+            &gt; WhatsApp &gt; Configuración de la API &gt; selector "De").
+          </p>
+          <form id="formNumeroManual" class="numero-manual-form">
+            <input type="text" id="inputNumeroManual" placeholder="phone_number_id" autocomplete="off" required />
+            <button type="submit" class="btn btn-sm btn-outline">Agregar</button>
+          </form>
+        </details>
       </div>
 
       <div class="card webhook-chat-card">

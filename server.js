@@ -285,6 +285,52 @@ app.get('/api/whatsapp/numeros', (req, res) => {
   });
 });
 
+// Agrega un número a mano, sin pasar por el popup de Embedded Signup.
+// Sirve cuando el número nuevo ya está en la MISMA cuenta de WhatsApp
+// Business (WABA) que la que ya tenés conectada: el access token actual
+// tiene permiso a nivel de WABA (no por número), así que sirve tal cual
+// para mandar desde cualquier número de esa cuenta. Se valida contra
+// Graph API antes de guardar, para no guardar un ID que no existe o al
+// que este token no tiene acceso.
+app.post('/api/whatsapp/numeros/manual', async (req, res) => {
+  const { phone_number_id } = req.body || {};
+  if (!phone_number_id || !String(phone_number_id).trim()) {
+    return res.status(400).json({ error: 'Falta el phone_number_id' });
+  }
+  const phoneNumberId = String(phone_number_id).trim();
+
+  const cliente = clienteActual(req);
+  if (!cliente.waba_id || !cliente.access_token) {
+    return res.status(400).json({ error: 'Todavía no tenés ningún número conectado — usá "Conectar WhatsApp Business" primero' });
+  }
+
+  const apiVersion = process.env.WHATSAPP_API_VERSION || 'v20.0';
+  try {
+    const infoRes = await fetch(`https://graph.facebook.com/${apiVersion}/${phoneNumberId}?fields=display_phone_number,verified_name,whatsapp_business_account`, {
+      headers: { Authorization: `Bearer ${cliente.access_token}` },
+    });
+    const infoData = await infoRes.json();
+    if (!infoRes.ok) {
+      return res.status(400).json({ error: infoData.error?.message || 'No se pudo verificar ese phone_number_id con Meta' });
+    }
+    if (infoData.whatsapp_business_account?.id && infoData.whatsapp_business_account.id !== cliente.waba_id) {
+      return res.status(400).json({ error: 'Ese número pertenece a otra cuenta de WhatsApp Business (WABA) — para ese caso hay que usar "Conectar WhatsApp Business"' });
+    }
+
+    const etiqueta = [infoData.verified_name, infoData.display_phone_number].filter(Boolean).join(' · ') || null;
+
+    db.prepare(
+      `INSERT INTO whatsapp_numeros (cliente_id, waba_id, phone_number_id, access_token, etiqueta)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(cliente_id, phone_number_id) DO UPDATE SET etiqueta = excluded.etiqueta`
+    ).run(req.session.clienteId, cliente.waba_id, phoneNumberId, cliente.access_token, etiqueta);
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // Cambia cuál de los números ya conectados es el activo — todo envío
 // nuevo (campañas y respuestas de chat) sale por este a partir de ahora.
 app.post('/api/whatsapp/numeros/:id/activar', (req, res) => {
