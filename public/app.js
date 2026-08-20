@@ -585,11 +585,15 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
   box.textContent = 'Iniciando envío…';
 
   try {
-    const res = await fetch('/api/campanas', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ template_nombre, idioma, contacto_ids, parametros }),
-    });
+    const formData = new FormData();
+    formData.append('template_nombre', template_nombre);
+    formData.append('idioma', idioma);
+    formData.append('contacto_ids', JSON.stringify(contacto_ids));
+    formData.append('parametros', JSON.stringify(parametros));
+    const archivoImagen = document.getElementById('templateImagen').files[0];
+    if (archivoImagen) formData.append('imagen', archivoImagen);
+
+    const res = await fetch('/api/campanas', { method: 'POST', body: formData });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Error al crear la campaña');
 

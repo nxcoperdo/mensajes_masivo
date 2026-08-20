@@ -9,7 +9,7 @@ import { db } from './db.js';
 import { hashPassword, verifyPassword } from './auth.js';
 import { parseCsv } from './csv.js';
 import { parseExcel } from './excel.js';
-import { sendTemplate, sendTextMessage, normalizePhone, isWhatsAppConfigured } from './whatsapp.js';
+import { sendTemplate, sendTextMessage, subirMedia, normalizePhone, isWhatsAppConfigured } from './whatsapp.js';
 import { buscarNegocios } from './leads.js';
 import {
   calcularResumen,
@@ -31,6 +31,19 @@ const upload = multer({
     const ext = path.extname(file.originalname).toLowerCase();
     if (!EXTENSIONES_PERMITIDAS.includes(ext)) {
       return cb(new Error('Formato no soportado. Usá un archivo .csv, .xlsx o .xls'));
+    }
+    cb(null, true);
+  },
+});
+
+const EXTENSIONES_IMAGEN_PERMITIDAS = ['.jpg', '.jpeg', '.png'];
+const uploadImagen = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // límite de Meta para imágenes de header
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!EXTENSIONES_IMAGEN_PERMITIDAS.includes(ext)) {
+      return cb(new Error('Formato no soportado. La imagen debe ser .jpg, .jpeg o .png'));
     }
     cb(null, true);
   },
@@ -505,64 +518,88 @@ app.get('/api/campanas/:id/envios', (req, res) => {
  * fetch colgado todo ese tiempo). El frontend hace polling a
  * `GET /api/campanas/:id` para ver el progreso.
  *
- * Body:
+ * multipart/form-data (no JSON, porque puede traer una imagen):
  *   template_nombre: string
  *   idioma: string (default 'es')
- *   contacto_ids: number[]
- *   parametros: Array<{ tipo: 'fijo'|'nombre', valor?: string }>
+ *   contacto_ids: string (JSON de number[])
+ *   parametros: string (JSON de Array<{ tipo: 'fijo'|'nombre', valor?: string }>)
  *     - 'nombre': se reemplaza por el nombre del contacto (o el
  *       teléfono si no tiene nombre cargado).
  *     - 'fijo': se manda `valor` tal cual, igual para todos.
+ *   imagen: archivo (opcional) — solo si la plantilla tiene un
+ *     encabezado de tipo imagen. Se sube una vez a Meta y se reusa el
+ *     media_id para todos los envíos de la campaña.
  */
 app.post('/api/campanas', (req, res) => {
-  const { template_nombre, idioma, contacto_ids, parametros } = req.body || {};
-  const cliente = clienteActual(req);
+  uploadImagen.single('imagen')(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message });
 
-  if (!template_nombre || !String(template_nombre).trim()) {
-    return res.status(400).json({ error: 'Falta el nombre de la plantilla' });
-  }
-  if (!Array.isArray(contacto_ids) || contacto_ids.length === 0) {
-    return res.status(400).json({ error: 'Elegí al menos un contacto' });
-  }
-  if (!isWhatsAppConfigured(cliente.phone_number_id, cliente.access_token)) {
-    return res.status(400).json({ error: 'Todavía no conectaste tu cuenta de WhatsApp Business' });
-  }
+    const { template_nombre, idioma } = req.body || {};
+    const cliente = clienteActual(req);
+    let contacto_ids, parametros;
+    try {
+      contacto_ids = JSON.parse(req.body?.contacto_ids || '[]');
+      parametros = JSON.parse(req.body?.parametros || '[]');
+    } catch {
+      return res.status(400).json({ error: 'Formato inválido en contacto_ids/parametros' });
+    }
 
-  const placeholders = contacto_ids.map(() => '?').join(',');
-  const contactos = db
-    .prepare(`SELECT * FROM contactos WHERE id IN (${placeholders}) AND cliente_id = ?`)
-    .all(...contacto_ids, cliente.id);
+    if (!template_nombre || !String(template_nombre).trim()) {
+      return res.status(400).json({ error: 'Falta el nombre de la plantilla' });
+    }
+    if (!Array.isArray(contacto_ids) || contacto_ids.length === 0) {
+      return res.status(400).json({ error: 'Elegí al menos un contacto' });
+    }
+    if (!isWhatsAppConfigured(cliente.phone_number_id, cliente.access_token)) {
+      return res.status(400).json({ error: 'Todavía no conectaste tu cuenta de WhatsApp Business' });
+    }
 
-  if (contactos.length === 0) {
-    return res.status(400).json({ error: 'No se encontraron los contactos seleccionados' });
-  }
+    const placeholders = contacto_ids.map(() => '?').join(',');
+    const contactos = db
+      .prepare(`SELECT * FROM contactos WHERE id IN (${placeholders}) AND cliente_id = ?`)
+      .all(...contacto_ids, cliente.id);
 
-  const parametrosDef = Array.isArray(parametros) ? parametros : [];
+    if (contactos.length === 0) {
+      return res.status(400).json({ error: 'No se encontraron los contactos seleccionados' });
+    }
 
-  const result = db
-    .prepare(
-      `INSERT INTO campanas (template_nombre, idioma, parametros_json, total_contactos, estado, cliente_id)
-       VALUES (?, ?, ?, ?, 'procesando', ?)`
-    )
-    .run(template_nombre.trim(), idioma || 'es', JSON.stringify(parametrosDef), contactos.length, cliente.id);
+    let imagenMediaId = null;
+    if (req.file) {
+      const subida = await subirMedia(req.file.buffer, req.file.mimetype, cliente.phone_number_id, cliente.access_token);
+      if (!subida.ok) {
+        return res.status(502).json({ error: `No se pudo subir la imagen a WhatsApp: ${subida.error}` });
+      }
+      imagenMediaId = subida.mediaId;
+    }
 
-  const campanaId = result.lastInsertRowid;
+    const parametrosDef = Array.isArray(parametros) ? parametros : [];
 
-  // Fire-and-forget: procesa en background, el request ya respondió.
-  procesarCampana({
-    campanaId,
-    template_nombre: template_nombre.trim(),
-    idioma: idioma || 'es',
-    parametrosDef,
-    contactos,
-    phoneNumberId: cliente.phone_number_id,
-    accessToken: cliente.access_token,
+    const result = db
+      .prepare(
+        `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, total_contactos, estado, cliente_id)
+         VALUES (?, ?, ?, ?, ?, 'procesando', ?)`
+      )
+      .run(template_nombre.trim(), idioma || 'es', JSON.stringify(parametrosDef), imagenMediaId, contactos.length, cliente.id);
+
+    const campanaId = result.lastInsertRowid;
+
+    // Fire-and-forget: procesa en background, el request ya respondió.
+    procesarCampana({
+      campanaId,
+      template_nombre: template_nombre.trim(),
+      idioma: idioma || 'es',
+      parametrosDef,
+      imagenMediaId,
+      contactos,
+      phoneNumberId: cliente.phone_number_id,
+      accessToken: cliente.access_token,
+    });
+
+    res.status(202).json({ campana_id: campanaId, total: contactos.length });
   });
-
-  res.status(202).json({ campana_id: campanaId, total: contactos.length });
 });
 
-async function procesarCampana({ campanaId, template_nombre, idioma, parametrosDef, contactos, phoneNumberId, accessToken }) {
+async function procesarCampana({ campanaId, template_nombre, idioma, parametrosDef, imagenMediaId, contactos, phoneNumberId, accessToken }) {
   const delayMs = Number(process.env.ENVIO_DELAY_MS) || 250;
   const insertEnvio = db.prepare(`
     INSERT INTO envios (campana_id, contacto_id, telefono, nombre, estado, error, wa_message_id)
@@ -581,6 +618,7 @@ async function procesarCampana({ campanaId, template_nombre, idioma, parametrosD
       parameters: parametrosResueltos,
       phoneNumberId,
       accessToken,
+      headerMediaId: imagenMediaId,
     });
 
     insertEnvio.run(
