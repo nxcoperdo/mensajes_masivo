@@ -37,6 +37,23 @@ export function normalizePhone(rawPhone) {
 }
 
 /**
+ * Meta manda el motivo corto en `error.message` (ej: "Parameter format
+ * does not match format in the created template") pero el detalle que
+ * de verdad dice QUÉ componente/parámetro no matchea suele venir en
+ * `error.error_data.details` — sin esto, errores como el 132012 quedan
+ * imposibles de diagnosticar solo con el mensaje corto.
+ */
+function mensajeErrorMeta(data, status) {
+  const base = data.error?.message || `HTTP ${status}`;
+  const detalle = data.error?.error_data?.details;
+  const codigo = data.error?.code;
+  const partes = [base];
+  if (detalle && detalle !== base) partes.push(detalle);
+  if (codigo) partes.push(`(código ${codigo})`);
+  return partes.join(' — ');
+}
+
+/**
  * Sube una imagen a Meta (Media API) para usarla como encabezado de
  * una plantilla. Devuelve un media_id reusable por un tiempo limitado
  * (Meta lo vence a los pocos días), así que se sube una vez por
@@ -66,7 +83,7 @@ export async function subirMedia(buffer, mimetype, phoneNumberId, accessToken) {
     });
     const data = await res.json();
     if (!res.ok) {
-      return { ok: false, error: data.error?.message || `HTTP ${res.status}` };
+      return { ok: false, error: mensajeErrorMeta(data, res.status) };
     }
     return { ok: true, mediaId: data.id };
   } catch (err) {
@@ -129,7 +146,7 @@ export async function sendTemplate({ to, template, languageCode, parameters = []
     });
     const data = await res.json();
     if (!res.ok) {
-      return { ok: false, error: data.error?.message || `HTTP ${res.status}` };
+      return { ok: false, error: mensajeErrorMeta(data, res.status) };
     }
     return { ok: true, messageId: data.messages?.[0]?.id };
   } catch (err) {
@@ -179,7 +196,7 @@ export async function sendTextMessage({ to, body, phoneNumberId, accessToken }) 
     });
     const data = await res.json();
     if (!res.ok) {
-      return { ok: false, error: data.error?.message || `HTTP ${res.status}` };
+      return { ok: false, error: mensajeErrorMeta(data, res.status) };
     }
     return { ok: true, messageId: data.messages?.[0]?.id };
   } catch (err) {
