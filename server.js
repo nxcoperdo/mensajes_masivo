@@ -92,7 +92,10 @@ app.use(
 app.use(requireAuth);
 // Guarda el body crudo (necesario para verificar la firma HMAC del
 // webhook de Meta) sin cambiar cómo se usa req.body en el resto de la app.
-app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
+// El límite por defecto de express.json es 100 KB, y una campaña con
+// varios miles de contactos manda un array de IDs que lo supera (el
+// navegador recibía un 413 antes de llegar al endpoint).
+app.use(express.json({ limit: '10mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 function clienteActual(req) {
