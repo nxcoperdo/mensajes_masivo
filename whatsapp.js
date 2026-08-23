@@ -37,6 +37,61 @@ export function normalizePhone(rawPhone) {
 }
 
 /**
+ * Meta manda el motivo corto en `error.message` (ej: "Parameter format
+ * does not match format in the created template") pero el detalle que
+ * de verdad dice QUÉ componente/parámetro no matchea suele venir en
+ * `error.error_data.details` — sin esto, errores como el 132012 quedan
+ * imposibles de diagnosticar solo con el mensaje corto.
+ */
+function mensajeErrorMeta(data, status) {
+  const base = data.error?.message || `HTTP ${status}`;
+  const detalle = data.error?.error_data?.details;
+  const codigo = data.error?.code;
+  const partes = [base];
+  if (detalle && detalle !== base) partes.push(detalle);
+  if (codigo) partes.push(`(código ${codigo})`);
+  return partes.join(' — ');
+}
+
+/**
+ * Sube una imagen a Meta (Media API) para usarla como encabezado de
+ * una plantilla. Devuelve un media_id reusable por un tiempo limitado
+ * (Meta lo vence a los pocos días), así que se sube una vez por
+ * campaña y se reusa ese id para todos los envíos de esa campaña.
+ *
+ * @param {Buffer} buffer
+ * @param {string} mimetype - ej: 'image/jpeg', 'image/png'
+ * @param {string} phoneNumberId - de `clientes.phone_number_id`
+ * @param {string} accessToken   - de `clientes.access_token`
+ * @returns {Promise<{ok: boolean, mediaId?: string, error?: string}>}
+ */
+export async function subirMedia(buffer, mimetype, phoneNumberId, accessToken) {
+  const config = getConfig(phoneNumberId, accessToken);
+  if (!config) {
+    return { ok: false, error: 'WhatsApp no configurado para este cliente (conectá tu cuenta de WhatsApp Business)' };
+  }
+
+  const form = new FormData();
+  form.append('messaging_product', 'whatsapp');
+  form.append('file', new Blob([buffer], { type: mimetype }), 'imagen');
+
+  try {
+    const res = await fetch(`${config.base}/media`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${config.token}` },
+      body: form,
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: mensajeErrorMeta(data, res.status) };
+    }
+    return { ok: true, mediaId: data.id };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
  * Manda una plantilla aprobada a un número.
  *
  * @param {Object} params
@@ -46,9 +101,11 @@ export function normalizePhone(rawPhone) {
  * @param {string[]} [params.parameters] - valores para {{1}}, {{2}}...
  * @param {string} [params.phoneNumberId] - de `clientes.phone_number_id`
  * @param {string} [params.accessToken]   - de `clientes.access_token`
+ * @param {string} [params.headerMediaId] - media_id (de subirMedia) si la
+ *   plantilla tiene una imagen en el encabezado
  * @returns {Promise<{ok: boolean, messageId?: string, error?: string}>}
  */
-export async function sendTemplate({ to, template, languageCode, parameters = [], phoneNumberId, accessToken }) {
+export async function sendTemplate({ to, template, languageCode, parameters = [], phoneNumberId, accessToken, headerMediaId }) {
   const config = getConfig(phoneNumberId, accessToken);
   if (!config) {
     return { ok: false, error: 'WhatsApp no configurado para este cliente (conectá tu cuenta de WhatsApp Business)' };
@@ -59,6 +116,14 @@ export async function sendTemplate({ to, template, languageCode, parameters = []
     return { ok: false, error: `Teléfono inválido: "${to}"` };
   }
 
+  const components = [];
+  if (headerMediaId) {
+    components.push({ type: 'header', parameters: [{ type: 'image', image: { id: headerMediaId } }] });
+  }
+  if (parameters.length) {
+    components.push({ type: 'body', parameters: parameters.map((p) => ({ type: 'text', text: String(p) })) });
+  }
+
   const body = {
     messaging_product: 'whatsapp',
     to: finalTo,
@@ -66,9 +131,7 @@ export async function sendTemplate({ to, template, languageCode, parameters = []
     template: {
       name: template,
       language: { code: languageCode || process.env.WHATSAPP_LANGUAGE_CODE || 'es' },
-      components: parameters.length
-        ? [{ type: 'body', parameters: parameters.map((p) => ({ type: 'text', text: String(p) })) }]
-        : [],
+      components,
     },
   };
 
@@ -83,7 +146,7 @@ export async function sendTemplate({ to, template, languageCode, parameters = []
     });
     const data = await res.json();
     if (!res.ok) {
-      return { ok: false, error: data.error?.message || `HTTP ${res.status}` };
+      return { ok: false, error: mensajeErrorMeta(data, res.status) };
     }
     return { ok: true, messageId: data.messages?.[0]?.id };
   } catch (err) {
@@ -133,7 +196,7 @@ export async function sendTextMessage({ to, body, phoneNumberId, accessToken }) 
     });
     const data = await res.json();
     if (!res.ok) {
-      return { ok: false, error: data.error?.message || `HTTP ${res.status}` };
+      return { ok: false, error: mensajeErrorMeta(data, res.status) };
     }
     return { ok: true, messageId: data.messages?.[0]?.id };
   } catch (err) {

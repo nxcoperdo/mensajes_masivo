@@ -43,6 +43,7 @@ db.exec(`
     template_nombre TEXT NOT NULL,
     idioma TEXT NOT NULL DEFAULT 'es',
     parametros_json TEXT NOT NULL DEFAULT '[]',
+    imagen_media_id TEXT,
     total_contactos INTEGER NOT NULL DEFAULT 0,
     estado TEXT NOT NULL DEFAULT 'procesando',
     cliente_id INTEGER,
@@ -187,6 +188,7 @@ agregarColumnaSiFalta('mensajes', 'cliente_id INTEGER');
 agregarColumnaSiFalta('leads_prospectos', 'cliente_id INTEGER');
 agregarColumnaSiFalta('mensajes', 'media_id TEXT');
 agregarColumnaSiFalta('mensajes', 'media_mime_type TEXT');
+agregarColumnaSiFalta('campanas', 'imagen_media_id TEXT');
 
 /**
  * Facturación: qué se le cobra a cada cliente y con qué datos sale su
