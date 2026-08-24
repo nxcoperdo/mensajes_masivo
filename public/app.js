@@ -747,7 +747,7 @@ function actualizarSeleccionCampanas() {
     .filter((c) => campanasSeleccionadas.has(c.id))
     .reduce((acumulado, c) => acumulado + (c.enviados || 0), 0);
 
-  for (const id of ['btnEstadisticas', 'btnReportePdf', 'btnGenerarFactura']) {
+  for (const id of ['btnEstadisticas', 'btnReportePdf', 'btnHistorialPdf', 'btnGenerarFactura']) {
     document.getElementById(id).disabled = total === 0;
   }
   document.getElementById('btnGenerarFactura').disabled = total === 0 || enviadosSeleccionados === 0;
@@ -1101,6 +1101,18 @@ document.getElementById('btnReportePdf').addEventListener('click', () => {
     `/api/facturacion/reporte.pdf?${params}`,
     `reporte-campanas-${new Date().toISOString().slice(0, 10)}.pdf`,
     document.getElementById('btnReportePdf')
+  );
+});
+
+document.getElementById('btnHistorialPdf').addEventListener('click', () => {
+  const ids = idsSeleccionados();
+  if (ids.length === 0) return;
+  const params = new URLSearchParams({ ids: ids.join(',') });
+  if (esAdminFacturacion && facturacionConfig) params.set('cliente_id', facturacionConfig.cliente_id);
+  descargarPdf(
+    `/api/facturacion/historial.pdf?${params}`,
+    `historial-detallado-${new Date().toISOString().slice(0, 10)}.pdf`,
+    document.getElementById('btnHistorialPdf')
   );
 });
 

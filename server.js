@@ -16,6 +16,7 @@ import {
   datosEmisor,
   generarFacturaPdf,
   generarReportePdf,
+  generarHistorialDetalladoPdf,
   nombreArchivo,
 } from './facturacion.js';
 
@@ -823,6 +824,45 @@ app.get('/api/facturacion/reporte.pdf', (req, res) => {
   } catch (err) {
     console.error('Error generando el reporte PDF:', err);
     res.status(500).json({ error: 'No se pudo generar el reporte PDF' });
+  }
+});
+
+/**
+ * Historial detallado en PDF: cada envío (no cada campaña) de las
+ * campañas seleccionadas, con la plantilla, el contacto y el detalle
+ * técnico del envío — complementa a `reporte.pdf`, que solo agrega
+ * totales por campaña.
+ */
+app.get('/api/facturacion/historial.pdf', (req, res) => {
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.query.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  const ids = idsDesdeQuery(req.query.ids);
+  const campanas = campanasParaFacturar(cliente.id, ids);
+  if (campanas.length === 0) {
+    return res.status(400).json({ error: 'Elegí al menos una campaña de este cliente' });
+  }
+
+  const marcadores = campanas.map(() => '?').join(',');
+  const envios = db
+    .prepare(
+      `SELECT e.telefono, e.nombre, e.estado, e.error, e.wa_message_id, c.template_nombre
+       FROM envios e
+       JOIN campanas c ON c.id = e.campana_id
+       WHERE e.campana_id IN (${marcadores})
+       ORDER BY c.id ASC, e.id ASC`
+    )
+    .all(...campanas.map((c) => c.id));
+
+  try {
+    const pdf = generarHistorialDetalladoPdf({ campanas, envios, cliente });
+    const nombre = nombreArchivo(`historial-${cliente.nombre_negocio || cliente.email}-${new Date().toISOString().slice(0, 10)}`);
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', `attachment; filename="${nombre}.pdf"`);
+    res.send(pdf);
+  } catch (err) {
+    console.error('Error generando el historial detallado PDF:', err);
+    res.status(500).json({ error: 'No se pudo generar el historial detallado PDF' });
   }
 });
 

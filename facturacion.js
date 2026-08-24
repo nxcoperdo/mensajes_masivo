@@ -958,6 +958,100 @@ export function generarReportePdf({ resumen, cliente, emisor = datosEmisor(), ge
   return doc.buffer();
 }
 
+// ==================== PDF: HISTORIAL DETALLADO ====================
+
+/**
+ * Listado envío por envío de las campañas seleccionadas: plantilla,
+ * teléfono, nombre del contacto, estado y el detalle técnico del envío
+ * (el error de Meta si falló, o el ID del mensaje si salió bien — el
+ * mismo dato que ya se ve en "Detalle de campaña" en la app, acá
+ * agregado para varias campañas a la vez en un PDF descargable).
+ */
+export function generarHistorialDetalladoPdf({ campanas, envios, cliente, emisor = datosEmisor(), generadoEn = new Date() }) {
+  const doc = crearDocumento();
+  const piePagina = `${emisor.nombre}  ·  Historial detallado de ${cliente.nombre_negocio || cliente.email}  ·  ${fechaConHora(generadoEn)}`;
+
+  const nuevaPaginaContinuacion = () => {
+    pie(doc, doc.totalPaginas, piePagina);
+    doc.nuevaPagina();
+    const alto = cabecera(doc, { titulo: 'HISTORIAL DETALLADO', subtitulo: 'ENVÍOS POR CONTACTO' });
+    return alto + 24;
+  };
+
+  let y = cabecera(doc, {
+    titulo: 'HISTORIAL DETALLADO',
+    subtitulo: 'ENVÍOS POR CONTACTO',
+    lineasDerecha: [
+      `Cliente: ${cliente.nombre_negocio || cliente.email}`,
+      `${campanas.length} campaña${campanas.length === 1 ? '' : 's'} — ${formatearNumero(envios.length)} envíos`,
+      `Generado el ${fechaConHora(generadoEn)}`,
+    ],
+  });
+
+  y += 22;
+
+  const conteos = envios.reduce((acc, e) => {
+    acc[e.estado] = (acc[e.estado] || 0) + 1;
+    return acc;
+  }, {});
+
+  rotulo(doc, 'Resumen', MARGEN, y);
+  y += 16;
+  doc.rectangulo(MARGEN, y, ANCHO_UTIL, 40, { relleno: COLOR.fondo, borde: COLOR.borde, radio: 8 });
+  doc.texto(
+    `Enviados: ${formatearNumero(conteos.enviado || 0)}      Entregados: ${formatearNumero(conteos.entregado || 0)}      ` +
+      `Leídos: ${formatearNumero(conteos.leido || 0)}      Fallidos: ${formatearNumero(conteos.fallido || 0)}`,
+    MARGEN + 14,
+    y + 14,
+    { tamano: 9.5, fuente: 'negrita', color: COLOR.tinta }
+  );
+  y += 40 + 22;
+
+  rotulo(doc, 'Detalle por contacto', MARGEN, y);
+  y += 16;
+
+  const anchos = [130, 85, 110, 65, ANCHO_UTIL - 130 - 85 - 110 - 65];
+  const columnas = [
+    { titulo: 'Plantilla', clave: 'plantilla', ancho: anchos[0] },
+    { titulo: 'Teléfono', clave: 'telefono', ancho: anchos[1] },
+    { titulo: 'Nombre', clave: 'nombre', ancho: anchos[2] },
+    { titulo: 'Estado', clave: 'estado', ancho: anchos[3] },
+    { titulo: 'Detalle / log', clave: 'detalle', ancho: anchos[4] },
+  ];
+
+  const colorEstado = {
+    enviado: COLOR.azul,
+    entregado: COLOR.verde,
+    leido: COLOR.azulOscuro,
+    fallido: COLOR.rojo,
+  };
+
+  const filas = envios.map((e) => ({
+    plantilla: e.template_nombre,
+    telefono: e.telefono,
+    nombre: e.nombre || '—',
+    estado: {
+      texto: e.estado.charAt(0).toUpperCase() + e.estado.slice(1),
+      color: colorEstado[e.estado] || COLOR.suave,
+      fuente: 'negrita',
+    },
+    detalle: e.error || (e.wa_message_id ? `ID: ${e.wa_message_id}` : '—'),
+  }));
+
+  tabla(doc, {
+    x: MARGEN,
+    y,
+    columnas,
+    filas,
+    altoFila: 22,
+    alSaltarPagina: nuevaPaginaContinuacion,
+    sinFilas: 'No hay envíos para las campañas seleccionadas.',
+  });
+
+  pie(doc, doc.totalPaginas, piePagina);
+  return doc.buffer();
+}
+
 /** Nombre de archivo seguro para la descarga. */
 export function nombreArchivo(base) {
   return String(base)
