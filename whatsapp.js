@@ -102,10 +102,12 @@ export async function subirMedia(buffer, mimetype, phoneNumberId, accessToken) {
  * @param {string} [params.phoneNumberId] - de `clientes.phone_number_id`
  * @param {string} [params.accessToken]   - de `clientes.access_token`
  * @param {string} [params.headerMediaId] - media_id (de subirMedia) si la
- *   plantilla tiene una imagen en el encabezado
+ *   plantilla tiene una imagen o un video en el encabezado
+ * @param {'image'|'video'} [params.headerMediaTipo] - tipo del media de
+ *   encabezado (default 'image')
  * @returns {Promise<{ok: boolean, messageId?: string, error?: string}>}
  */
-export async function sendTemplate({ to, template, languageCode, parameters = [], phoneNumberId, accessToken, headerMediaId }) {
+export async function sendTemplate({ to, template, languageCode, parameters = [], phoneNumberId, accessToken, headerMediaId, headerMediaTipo }) {
   const config = getConfig(phoneNumberId, accessToken);
   if (!config) {
     return { ok: false, error: 'WhatsApp no configurado para este cliente (conectá tu cuenta de WhatsApp Business)' };
@@ -118,7 +120,8 @@ export async function sendTemplate({ to, template, languageCode, parameters = []
 
   const components = [];
   if (headerMediaId) {
-    components.push({ type: 'header', parameters: [{ type: 'image', image: { id: headerMediaId } }] });
+    const tipo = headerMediaTipo === 'video' ? 'video' : 'image';
+    components.push({ type: 'header', parameters: [{ type: tipo, [tipo]: { id: headerMediaId } }] });
   }
   if (parameters.length) {
     components.push({ type: 'body', parameters: parameters.map((p) => ({ type: 'text', text: String(p) })) });

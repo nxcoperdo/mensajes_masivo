@@ -38,13 +38,25 @@ const upload = multer({
 });
 
 const EXTENSIONES_IMAGEN_PERMITIDAS = ['.jpg', '.jpeg', '.png'];
+const EXTENSIONES_VIDEO_PERMITIDAS = ['.mp4', '.3gp', '.3gpp'];
+const EXTENSIONES_ENCABEZADO_PERMITIDAS = [
+  ...EXTENSIONES_IMAGEN_PERMITIDAS,
+  ...EXTENSIONES_VIDEO_PERMITIDAS,
+];
+
+/** Devuelve 'image' | 'video' según la extensión del archivo de encabezado. */
+function tipoEncabezado(originalname) {
+  const ext = path.extname(originalname).toLowerCase();
+  return EXTENSIONES_VIDEO_PERMITIDAS.includes(ext) ? 'video' : 'image';
+}
+
 const uploadImagen = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 }, // límite de Meta para imágenes de header
+  limits: { fileSize: 16 * 1024 * 1024 }, // límite de Meta para video de header (imágenes: 5MB)
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (!EXTENSIONES_IMAGEN_PERMITIDAS.includes(ext)) {
-      return cb(new Error('Formato no soportado. La imagen debe ser .jpg, .jpeg o .png'));
+    if (!EXTENSIONES_ENCABEZADO_PERMITIDAS.includes(ext)) {
+      return cb(new Error('Formato no soportado. El encabezado debe ser una imagen (.jpg, .jpeg, .png) o un video (.mp4, .3gp)'));
     }
     cb(null, true);
   },
@@ -568,10 +580,13 @@ app.post('/api/campanas', (req, res) => {
     }
 
     let imagenMediaId = null;
+    let encabezadoTipo = null;
     if (req.file) {
+      encabezadoTipo = tipoEncabezado(req.file.originalname);
       const subida = await subirMedia(req.file.buffer, req.file.mimetype, cliente.phone_number_id, cliente.access_token);
       if (!subida.ok) {
-        return res.status(502).json({ error: `No se pudo subir la imagen a WhatsApp: ${subida.error}` });
+        const etiqueta = encabezadoTipo === 'video' ? 'el video' : 'la imagen';
+        return res.status(502).json({ error: `No se pudo subir ${etiqueta} a WhatsApp: ${subida.error}` });
       }
       imagenMediaId = subida.mediaId;
     }
@@ -580,10 +595,10 @@ app.post('/api/campanas', (req, res) => {
 
     const result = db
       .prepare(
-        `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, total_contactos, estado, cliente_id)
-         VALUES (?, ?, ?, ?, ?, 'procesando', ?)`
+        `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id)
+         VALUES (?, ?, ?, ?, ?, ?, 'procesando', ?)`
       )
-      .run(template_nombre.trim(), idioma || 'es', JSON.stringify(parametrosDef), imagenMediaId, contactos.length, cliente.id);
+      .run(template_nombre.trim(), idioma || 'es', JSON.stringify(parametrosDef), imagenMediaId, encabezadoTipo, contactos.length, cliente.id);
 
     const campanaId = result.lastInsertRowid;
 
@@ -594,6 +609,7 @@ app.post('/api/campanas', (req, res) => {
       idioma: idioma || 'es',
       parametrosDef,
       imagenMediaId,
+      encabezadoTipo,
       contactos,
       phoneNumberId: cliente.phone_number_id,
       accessToken: cliente.access_token,
@@ -603,7 +619,7 @@ app.post('/api/campanas', (req, res) => {
   });
 });
 
-async function procesarCampana({ campanaId, template_nombre, idioma, parametrosDef, imagenMediaId, contactos, phoneNumberId, accessToken }) {
+async function procesarCampana({ campanaId, template_nombre, idioma, parametrosDef, imagenMediaId, encabezadoTipo, contactos, phoneNumberId, accessToken }) {
   const delayMs = Number(process.env.ENVIO_DELAY_MS) || 250;
   const insertEnvio = db.prepare(`
     INSERT INTO envios (campana_id, contacto_id, telefono, nombre, estado, error, wa_message_id)
@@ -623,6 +639,7 @@ async function procesarCampana({ campanaId, template_nombre, idioma, parametrosD
       phoneNumberId,
       accessToken,
       headerMediaId: imagenMediaId,
+      headerMediaTipo: encabezadoTipo,
     });
 
     insertEnvio.run(
