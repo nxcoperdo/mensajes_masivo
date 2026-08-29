@@ -10,6 +10,7 @@ import { hashPassword, verifyPassword } from './auth.js';
 import { parseCsv } from './csv.js';
 import { parseExcel } from './excel.js';
 import { sendTemplate, sendTextMessage, subirMedia, normalizePhone, isWhatsAppConfigured } from './whatsapp.js';
+import { normalizarVideoWhatsApp, MAX_VIDEO_BYTES } from './video.js';
 import { buscarNegocios } from './leads.js';
 import {
   calcularResumen,
@@ -52,7 +53,9 @@ function tipoEncabezado(originalname) {
 
 const uploadImagen = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 16 * 1024 * 1024 }, // límite de Meta para video de header (imágenes: 5MB)
+  // Tope de subida generoso: un video se re-codifica después y recién
+  // ahí se valida contra el límite real de Meta (16MB). Imágenes: 5MB.
+  limits: { fileSize: 64 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     if (!EXTENSIONES_ENCABEZADO_PERMITIDAS.includes(ext)) {
@@ -543,8 +546,10 @@ app.get('/api/campanas/:id/envios', (req, res) => {
  *       teléfono si no tiene nombre cargado).
  *     - 'fijo': se manda `valor` tal cual, igual para todos.
  *   imagen: archivo (opcional) — solo si la plantilla tiene un
- *     encabezado de tipo imagen. Se sube una vez a Meta y se reusa el
- *     media_id para todos los envíos de la campaña.
+ *     encabezado de tipo imagen o video. Se sube una vez a Meta y se
+ *     reusa el media_id para todos los envíos de la campaña. Si es un
+ *     video se re-codifica con ffmpeg (H.264/AAC/faststart) para que se
+ *     vea en Android, no solo en iOS.
  */
 app.post('/api/campanas', (req, res) => {
   uploadImagen.single('imagen')(req, res, async (err) => {
@@ -583,7 +588,26 @@ app.post('/api/campanas', (req, res) => {
     let encabezadoTipo = null;
     if (req.file) {
       encabezadoTipo = tipoEncabezado(req.file.originalname);
-      const subida = await subirMedia(req.file.buffer, req.file.mimetype, cliente.phone_number_id, cliente.access_token);
+      let { buffer, mimetype } = req.file;
+
+      if (encabezadoTipo === 'video') {
+        // Re-codifica a H.264/AAC/faststart para que Android no lo
+        // muestre como "archivo dañado" (los videos de iPhone vienen en
+        // HEVC y solo se ven en iOS / WhatsApp Web).
+        const norm = await normalizarVideoWhatsApp(buffer);
+        buffer = norm.buffer;
+        mimetype = norm.mimetype;
+        if (!norm.convertido) {
+          console.warn(`[campañas] video de encabezado enviado sin normalizar: ${norm.error}`);
+        }
+        if (buffer.length > MAX_VIDEO_BYTES) {
+          return res.status(400).json({
+            error: 'El video supera los 16MB que permite WhatsApp. Usá uno más corto o de menor resolución.',
+          });
+        }
+      }
+
+      const subida = await subirMedia(buffer, mimetype, cliente.phone_number_id, cliente.access_token);
       if (!subida.ok) {
         const etiqueta = encabezadoTipo === 'video' ? 'el video' : 'la imagen';
         return res.status(502).json({ error: `No se pudo subir ${etiqueta} a WhatsApp: ${subida.error}` });

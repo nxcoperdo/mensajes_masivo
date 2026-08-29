@@ -50,6 +50,11 @@ Abrir `http://localhost:4100` (o el puerto que hayas puesto en `.env`).
   no esta app.
 - Para desplegar esto en un servidor (VPS), correr con PM2 igual que
   cualquier app Node: `pm2 start server.js --name whatsapp-broadcast`.
+- Si vas a usar plantillas con **video en el encabezado**, instalá
+  `ffmpeg` en el servidor (`apt install ffmpeg`). La app re-codifica cada
+  video subido a H.264/AAC/faststart para que se vea en Android y no
+  solo en iOS. Sin ffmpeg el video se sube tal cual (y puede salir como
+  "archivo dañado" en Android). Ruta configurable con `FFMPEG_PATH`.
 
 ## Login y cuentas de cliente
 
