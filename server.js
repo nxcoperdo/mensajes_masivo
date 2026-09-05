@@ -1224,12 +1224,17 @@ app.get('/api/facturacion/historial.pdf', (req, res) => {
  * se configura en Historial → Tarifa, pero no toca `campanas`/`envios`
  * (no hay nada enviado todavía). Complementa a `reporte.pdf`, que es el
  * mismo cálculo pero sobre mensajes ya mandados.
+ *
+ * Es POST (no GET con query string) porque una empresa puede tener miles
+ * de contactos seleccionados — pasar esos ids en la URL se pasa del
+ * límite de largo de request que aceptan los navegadores/proxies (414
+ * Request-URI Too Large visto en producción con ~250 contactos).
  */
-app.get('/api/facturacion/cotizacion.pdf', (req, res) => {
-  const { cliente, error, status } = resolverClienteObjetivo(req, req.query.cliente_id);
+app.post('/api/facturacion/cotizacion.pdf', (req, res) => {
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.body?.cliente_id);
   if (error) return res.status(status).json({ error });
 
-  const ids = idsDesdeQuery(req.query.contacto_ids);
+  const ids = idsDesdeQuery(req.body?.contacto_ids);
   if (ids.length === 0) {
     return res.status(400).json({ error: 'Elegí al menos un contacto' });
   }

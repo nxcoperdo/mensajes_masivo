@@ -552,9 +552,16 @@ async function calcularYMostrarCotizacion({ contactoIds, clienteId, box, btnDesc
 
     btnDescargar.classList.remove('hidden');
     btnDescargar.onclick = () => {
-      const params = new URLSearchParams({ contacto_ids: contactoIds.join(',') });
-      if (clienteId) params.set('cliente_id', clienteId);
-      descargarPdf(`/api/facturacion/cotizacion.pdf?${params}`, `cotizacion-${new Date().toISOString().slice(0, 10)}.pdf`, btnDescargar);
+      descargarPdf(
+        '/api/facturacion/cotizacion.pdf',
+        `cotizacion-${new Date().toISOString().slice(0, 10)}.pdf`,
+        btnDescargar,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contacto_ids: contactoIds, cliente_id: clienteId || undefined }),
+        }
+      );
     };
   } catch (err) {
     box.classList.add('error');
@@ -1791,13 +1798,16 @@ function renderEstadisticas(resumen) {
 /**
  * Los PDF se piden con fetch (no con un `window.open`) para poder
  * mostrar el mensaje de error del servidor si algo sale mal, en vez de
- * abrir una pestaña con un JSON crudo.
+ * abrir una pestaña con un JSON crudo. `opcionesFetch` permite pedirlo
+ * por POST (con body) en vez de GET — necesario cuando el parámetro no
+ * entra en una URL (ej: cientos de `contacto_ids` se pasan del límite de
+ * largo de request que aceptan navegadores/proxies, ver cotización).
  */
-async function descargarPdf(url, nombreSugerido, btn) {
+async function descargarPdf(url, nombreSugerido, btn, opcionesFetch = {}) {
   btn.disabled = true;
   btn.classList.add('is-loading');
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, opcionesFetch);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw new Error(data.error || 'No se pudo generar el PDF');
