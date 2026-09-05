@@ -642,6 +642,16 @@ input[type='file'] {
 .estado-entregado { background: var(--color-info-bg); color: var(--color-info); }
 .estado-leido { background: var(--color-success-bg); color: var(--color-success); }
 .estado-recibido { background: var(--color-surface-2); color: var(--color-text-muted); }
+.estado-programada { background: var(--color-warning-bg); color: var(--color-warning); }
+
+.checkbox-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: var(--space-3) 0;
+  font-size: 14px;
+}
+.checkbox-inline input { width: auto; }
 
 /* ==================== TAB BADGE (contador no leídos) ==================== */
 

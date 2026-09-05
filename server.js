@@ -9,8 +9,10 @@ import { db } from './db.js';
 import { hashPassword, verifyPassword } from './auth.js';
 import { parseCsv } from './csv.js';
 import { parseExcel } from './excel.js';
-import { sendTemplate, sendTextMessage, subirMedia, normalizePhone, isWhatsAppConfigured } from './whatsapp.js';
+import { sendTextMessage, subirMedia, normalizePhone, isWhatsAppConfigured } from './whatsapp.js';
 import { normalizarVideoWhatsApp, MAX_VIDEO_BYTES } from './video.js';
+import { procesarCampana } from './campanas.js';
+import { iniciarScheduler } from './scheduler.js';
 import { buscarNegocios } from './leads.js';
 import {
   calcularResumen,
@@ -382,23 +384,32 @@ app.post('/api/whatsapp/numeros/:id/activar', (req, res) => {
 
 // ==================== CONTACTOS ====================
 
+// `cliente_id` (query/body, según el método) solo lo puede usar un admin —
+// es lo que le permite gestionar los contactos de otra empresa desde el
+// panel de administración (ver resolverClienteObjetivo).
 app.get('/api/contactos', (req, res) => {
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.query.cliente_id);
+  if (error) return res.status(status).json({ error });
+
   const contactos = db
     .prepare('SELECT * FROM contactos WHERE cliente_id = ? ORDER BY nombre COLLATE NOCASE ASC')
-    .all(req.session.clienteId);
+    .all(cliente.id);
   res.json({ contactos });
 });
 
 app.post('/api/contactos', (req, res) => {
-  const { telefono, nombre } = req.body || {};
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.body?.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  const { telefono, nombre, fecha_recordatorio } = req.body || {};
   const normalizado = normalizePhone(telefono);
   if (!normalizado) {
     return res.status(400).json({ error: 'Teléfono inválido' });
   }
   try {
     const result = db
-      .prepare('INSERT INTO contactos (telefono, nombre, cliente_id) VALUES (?, ?, ?)')
-      .run(normalizado, nombre || null, req.session.clienteId);
+      .prepare('INSERT INTO contactos (telefono, nombre, cliente_id, fecha_recordatorio) VALUES (?, ?, ?, ?)')
+      .run(normalizado, nombre || null, cliente.id, fecha_recordatorio || null);
     res.status(201).json({ id: result.lastInsertRowid });
   } catch (err) {
     if (String(err.message).includes('UNIQUE')) {
@@ -409,23 +420,54 @@ app.post('/api/contactos', (req, res) => {
 });
 
 app.delete('/api/contactos', (req, res) => {
-  db.prepare('DELETE FROM contactos WHERE cliente_id = ?').run(req.session.clienteId);
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.query.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  db.prepare('DELETE FROM contactos WHERE cliente_id = ?').run(cliente.id);
   res.json({ ok: true });
 });
 
 app.delete('/api/contactos/:id', (req, res) => {
-  db.prepare('DELETE FROM contactos WHERE id = ? AND cliente_id = ?').run(req.params.id, req.session.clienteId);
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.query.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  db.prepare('DELETE FROM contactos WHERE id = ? AND cliente_id = ?').run(req.params.id, cliente.id);
   res.json({ ok: true });
 });
+
+// Columnas del CSV/Excel con un significado propio — todo lo demás que
+// traiga el archivo (fecha_cita, hora, servicio, etc.) se junta en
+// `variables_json` y queda disponible como parámetro de plantilla
+// (tipo 'variable', ver campanas.js).
+const COLUMNAS_RECONOCIDAS_CONTACTO = new Set([
+  'telefono', 'phone', 'numero', 'celular',
+  'nombre', 'name',
+  'fecha_envio', 'fecha_recordatorio',
+]);
+
+function variablesDeFila(row) {
+  const variables = {};
+  for (const [clave, valor] of Object.entries(row)) {
+    if (COLUMNAS_RECONOCIDAS_CONTACTO.has(clave)) continue;
+    if (valor) variables[clave] = valor;
+  }
+  return variables;
+}
 
 /**
  * Importa un CSV o Excel (.xlsx/.xls) con columnas `telefono` (o
  * `phone`/`numero`) y `nombre` (opcional). Hace upsert por teléfono
  * normalizado: si ya existe, actualiza el nombre; si no, lo crea.
+ * Cualquier otra columna (ej: `fecha_cita`, `hora`, `servicio`) se
+ * guarda como variable de plantilla del contacto, y `fecha_envio`/
+ * `fecha_recordatorio` programa su recordatorio individual.
  */
 app.post('/api/contactos/importar', (req, res) => {
   upload.single('archivo')(req, res, (err) => {
     if (err) return res.status(400).json({ error: err.message });
+
+    const { cliente, error, status } = resolverClienteObjetivo(req, req.body?.cliente_id);
+    if (error) return res.status(status).json({ error });
 
     if (!req.file) {
       return res.status(400).json({ error: 'Falta el archivo' });
@@ -441,8 +483,12 @@ app.post('/api/contactos/importar', (req, res) => {
     }
 
     const upsert = db.prepare(`
-      INSERT INTO contactos (telefono, nombre, cliente_id) VALUES (?, ?, ?)
-      ON CONFLICT(cliente_id, telefono) DO UPDATE SET nombre = COALESCE(excluded.nombre, contactos.nombre)
+      INSERT INTO contactos (telefono, nombre, cliente_id, variables_json, fecha_recordatorio)
+      VALUES (?, ?, ?, COALESCE(?, '{}'), ?)
+      ON CONFLICT(cliente_id, telefono) DO UPDATE SET
+        nombre = COALESCE(excluded.nombre, contactos.nombre),
+        variables_json = COALESCE(NULLIF(excluded.variables_json, '{}'), contactos.variables_json),
+        fecha_recordatorio = COALESCE(excluded.fecha_recordatorio, contactos.fecha_recordatorio)
     `);
 
     let importados = 0;
@@ -454,12 +500,20 @@ app.post('/api/contactos/importar', (req, res) => {
       for (const row of filas) {
         const telefonoRaw = row.telefono || row.phone || row.numero || row.celular || '';
         const nombreRaw = row.nombre || row.name || '';
+        const fechaRecordatorioRaw = row.fecha_envio || row.fecha_recordatorio || '';
         const normalizado = normalizePhone(telefonoRaw);
         if (!normalizado) {
           if (telefonoRaw) invalidos.push(telefonoRaw);
           continue;
         }
-        upsert.run(normalizado, nombreRaw || null, req.session.clienteId);
+        const variables = variablesDeFila(row);
+        upsert.run(
+          normalizado,
+          nombreRaw || null,
+          cliente.id,
+          Object.keys(variables).length > 0 ? JSON.stringify(variables) : null,
+          fechaRecordatorioRaw || null
+        );
         importados++;
       }
       db.exec('COMMIT');
@@ -501,7 +555,10 @@ app.get('/api/campanas', (req, res) => {
 });
 
 app.get('/api/campanas/:id', (req, res) => {
-  const campana = db.prepare('SELECT * FROM campanas WHERE id = ? AND cliente_id = ?').get(req.params.id, req.session.clienteId);
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.query.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  const campana = db.prepare('SELECT * FROM campanas WHERE id = ? AND cliente_id = ?').get(req.params.id, cliente.id);
   if (!campana) return res.status(404).json({ error: 'Campaña no encontrada' });
   const enviados = db
     .prepare(`SELECT COUNT(*) AS n FROM envios WHERE campana_id = ? AND estado IN ('enviado','entregado','leido')`)
@@ -531,32 +588,58 @@ app.get('/api/campanas/:id/envios', (req, res) => {
 });
 
 /**
- * Crea una campaña y dispara el envío EN SEGUNDO PLANO (no bloquea el
- * request — con 250+ contactos y un delay entre cada uno, esto puede
- * tardar más de un minuto, y no queremos que el navegador tenga un
- * fetch colgado todo ese tiempo). El frontend hace polling a
- * `GET /api/campanas/:id` para ver el progreso.
+ * Convierte lo que venga de un input `datetime-local` (o una fecha suelta
+ * tipo `2026-09-10` de un CSV) a un datetime UTC comparable con
+ * `datetime('now')` de SQLite (mismo formato que ya usa `pagada_en` en
+ * facturas). Devuelve `null` si no se pudo interpretar como fecha.
+ */
+function normalizarFechaProgramada(valor) {
+  if (!valor) return null;
+  const fecha = new Date(valor);
+  if (Number.isNaN(fecha.getTime())) return null;
+  return fecha.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function esFechaFutura(fechaSql) {
+  return Boolean(fechaSql) && fechaSql > new Date().toISOString().slice(0, 19).replace('T', ' ');
+}
+
+/**
+ * Crea una campaña y, si no está programada, dispara el envío EN SEGUNDO
+ * PLANO (no bloquea el request — con 250+ contactos y un delay entre
+ * cada uno, esto puede tardar más de un minuto). El frontend hace
+ * polling a `GET /api/campanas/:id` para ver el progreso.
  *
  * multipart/form-data (no JSON, porque puede traer una imagen):
+ *   cliente_id: string (opcional, solo admin) — empresa para la que se crea
  *   template_nombre: string
  *   idioma: string (default 'es')
  *   contacto_ids: string (JSON de number[])
- *   parametros: string (JSON de Array<{ tipo: 'fijo'|'nombre', valor?: string }>)
- *     - 'nombre': se reemplaza por el nombre del contacto (o el
- *       teléfono si no tiene nombre cargado).
+ *   parametros: string (JSON de Array<{ tipo: 'fijo'|'nombre'|'variable', valor?, clave? }>)
+ *     - 'nombre': nombre del contacto (o el teléfono si no tiene).
+ *     - 'variable': `contacto.variables_json[clave]` (ej: fecha_cita, hora).
  *     - 'fijo': se manda `valor` tal cual, igual para todos.
+ *   fecha_programada: string (opcional) — fecha/hora común para toda la
+ *     campaña; si es futura, no se envía ahora sino cuando el scheduler
+ *     la vea vencida (ver scheduler.js).
+ *   individual: 'true' (opcional) — en vez de una campaña con todos los
+ *     contactos, crea UNA CAMPAÑA POR CONTACTO usando el
+ *     `fecha_recordatorio` propio de cada uno (contactos sin esa fecha
+ *     quedan afuera, reportados en `omitidos`).
  *   imagen: archivo (opcional) — solo si la plantilla tiene un
  *     encabezado de tipo imagen o video. Se sube una vez a Meta y se
- *     reusa el media_id para todos los envíos de la campaña. Si es un
- *     video se re-codifica con ffmpeg (H.264/AAC/faststart) para que se
- *     vea en Android, no solo en iOS.
+ *     reusa el media_id para todos los envíos. Si es un video se
+ *     re-codifica con ffmpeg (H.264/AAC/faststart) para que se vea en
+ *     Android, no solo en iOS.
  */
 app.post('/api/campanas', (req, res) => {
   uploadImagen.single('imagen')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message });
 
-    const { template_nombre, idioma } = req.body || {};
-    const cliente = clienteActual(req);
+    const { cliente, error, status } = resolverClienteObjetivo(req, req.body?.cliente_id);
+    if (error) return res.status(status).json({ error });
+
+    const { template_nombre, idioma, fecha_programada, individual } = req.body || {};
     let contacto_ids, parametros;
     try {
       contacto_ids = JSON.parse(req.body?.contacto_ids || '[]');
@@ -616,73 +699,99 @@ app.post('/api/campanas', (req, res) => {
     }
 
     const parametrosDef = Array.isArray(parametros) ? parametros : [];
+    const templateNombreLimpio = template_nombre.trim();
+    const idiomaLimpio = idioma || 'es';
+
+    // ---- Modo "fecha individual": una campaña por contacto, cada una
+    // con SU propio `fecha_recordatorio` (ej: recordatorio de cada
+    // paciente el día antes de SU cita particular). ----
+    if (individual === 'true' || individual === true) {
+      const creadas = [];
+      const omitidos = [];
+      for (const contacto of contactos) {
+        const fechaProgramada = normalizarFechaProgramada(contacto.fecha_recordatorio);
+        if (!fechaProgramada) {
+          omitidos.push(contacto.telefono);
+          continue;
+        }
+        const futura = esFechaFutura(fechaProgramada);
+        const result = db
+          .prepare(
+            `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id, fecha_programada, contacto_ids_json)
+             VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`
+          )
+          .run(
+            templateNombreLimpio,
+            idiomaLimpio,
+            JSON.stringify(parametrosDef),
+            imagenMediaId,
+            encabezadoTipo,
+            futura ? 'programada' : 'procesando',
+            cliente.id,
+            fechaProgramada,
+            JSON.stringify([contacto.id])
+          );
+        creadas.push(result.lastInsertRowid);
+        if (!futura) {
+          procesarCampana({
+            campanaId: result.lastInsertRowid,
+            template_nombre: templateNombreLimpio,
+            idioma: idiomaLimpio,
+            parametrosDef,
+            imagenMediaId,
+            encabezadoTipo,
+            contactos: [contacto],
+            phoneNumberId: cliente.phone_number_id,
+            accessToken: cliente.access_token,
+          });
+        }
+      }
+      return res.status(202).json({ campana_ids: creadas, creadas: creadas.length, omitidos, total: contactos.length });
+    }
+
+    // ---- Modo normal: una sola campaña para todos los contactos
+    // seleccionados, inmediata o programada a una fecha común. ----
+    const fechaProgramadaComun = normalizarFechaProgramada(fecha_programada);
+    const futuraComun = esFechaFutura(fechaProgramadaComun);
 
     const result = db
       .prepare(
-        `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id)
-         VALUES (?, ?, ?, ?, ?, ?, 'procesando', ?)`
+        `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id, fecha_programada, contacto_ids_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(template_nombre.trim(), idioma || 'es', JSON.stringify(parametrosDef), imagenMediaId, encabezadoTipo, contactos.length, cliente.id);
+      .run(
+        templateNombreLimpio,
+        idiomaLimpio,
+        JSON.stringify(parametrosDef),
+        imagenMediaId,
+        encabezadoTipo,
+        contactos.length,
+        futuraComun ? 'programada' : 'procesando',
+        cliente.id,
+        futuraComun ? fechaProgramadaComun : null,
+        JSON.stringify(contactos.map((c) => c.id))
+      );
 
     const campanaId = result.lastInsertRowid;
 
-    // Fire-and-forget: procesa en background, el request ya respondió.
-    procesarCampana({
-      campanaId,
-      template_nombre: template_nombre.trim(),
-      idioma: idioma || 'es',
-      parametrosDef,
-      imagenMediaId,
-      encabezadoTipo,
-      contactos,
-      phoneNumberId: cliente.phone_number_id,
-      accessToken: cliente.access_token,
-    });
+    if (!futuraComun) {
+      // Fire-and-forget: procesa en background, el request ya respondió.
+      procesarCampana({
+        campanaId,
+        template_nombre: templateNombreLimpio,
+        idioma: idiomaLimpio,
+        parametrosDef,
+        imagenMediaId,
+        encabezadoTipo,
+        contactos,
+        phoneNumberId: cliente.phone_number_id,
+        accessToken: cliente.access_token,
+      });
+    }
 
-    res.status(202).json({ campana_id: campanaId, total: contactos.length });
+    res.status(202).json({ campana_id: campanaId, total: contactos.length, programada: futuraComun });
   });
 });
-
-async function procesarCampana({ campanaId, template_nombre, idioma, parametrosDef, imagenMediaId, encabezadoTipo, contactos, phoneNumberId, accessToken }) {
-  const delayMs = Number(process.env.ENVIO_DELAY_MS) || 250;
-  const insertEnvio = db.prepare(`
-    INSERT INTO envios (campana_id, contacto_id, telefono, nombre, estado, error, wa_message_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  for (const contacto of contactos) {
-    const parametrosResueltos = parametrosDef.map((p) =>
-      p.tipo === 'nombre' ? (contacto.nombre || contacto.telefono) : (p.valor || '')
-    );
-
-    const resultado = await sendTemplate({
-      to: contacto.telefono,
-      template: template_nombre,
-      languageCode: idioma,
-      parameters: parametrosResueltos,
-      phoneNumberId,
-      accessToken,
-      headerMediaId: imagenMediaId,
-      headerMediaTipo: encabezadoTipo,
-    });
-
-    insertEnvio.run(
-      campanaId,
-      contacto.id,
-      contacto.telefono,
-      contacto.nombre || null,
-      resultado.ok ? 'enviado' : 'fallido',
-      resultado.ok ? null : resultado.error,
-      resultado.messageId || null
-    );
-
-    if (delayMs > 0) {
-      await new Promise((r) => setTimeout(r, delayMs));
-    }
-  }
-
-  db.prepare(`UPDATE campanas SET estado = 'completada' WHERE id = ?`).run(campanaId);
-}
 
 // ==================== FACTURACIÓN ====================
 //
@@ -717,6 +826,71 @@ function resolverClienteObjetivo(req, idPedido) {
   if (!objetivo) return { error: 'Cliente no encontrado', status: 404 };
   return { cliente: objetivo, propio };
 }
+
+// ==================== ADMIN: GESTIÓN DE EMPRESAS ====================
+//
+// Panel para que el equipo admin (Code Repair Tech) suba contactos y cree
+// campañas EN NOMBRE de sus empresas cliente (ej: una odontología), sin que
+// esa empresa necesite loguearse. Reusa el mismo cruce de aislamiento que
+// ya tenía facturación (`resolverClienteObjetivo` de arriba), ahora también
+// en los endpoints de contactos y campañas.
+
+function serializarEmpresa(cliente) {
+  return {
+    id: cliente.id,
+    nombre_negocio: cliente.nombre_negocio,
+    email: cliente.email,
+    estado: cliente.estado,
+    whatsapp_conectado: Boolean(cliente.phone_number_id && cliente.access_token),
+  };
+}
+
+app.get('/api/admin/empresas', (req, res) => {
+  const propio = clienteActual(req);
+  if (!propio.es_admin) {
+    return res.status(403).json({ error: 'No tenés permiso para ver esta lista' });
+  }
+  const empresas = db
+    .prepare('SELECT * FROM clientes ORDER BY (id = ?) DESC, nombre_negocio COLLATE NOCASE ASC, email ASC')
+    .all(propio.id);
+  res.json({ empresas: empresas.map(serializarEmpresa) });
+});
+
+/** Crea una empresa cliente nueva sin tocar la sesión del admin logueado. */
+app.post('/api/admin/empresas', (req, res) => {
+  const propio = clienteActual(req);
+  if (!propio.es_admin) {
+    return res.status(403).json({ error: 'No tenés permiso para crear empresas' });
+  }
+
+  const { email, password, nombre_negocio } = req.body || {};
+  if (!email || !String(email).trim()) {
+    return res.status(400).json({ error: 'Falta el email' });
+  }
+  if (!password || String(password).length < 8) {
+    return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
+  }
+
+  const emailNormalizado = String(email).trim().toLowerCase();
+  const { hash, salt } = hashPassword(password);
+
+  try {
+    const result = db
+      .prepare(
+        `INSERT INTO clientes (email, password_hash, password_salt, nombre_negocio, estado)
+         VALUES (?, ?, ?, ?, 'pendiente_whatsapp')`
+      )
+      .run(emailNormalizado, hash, salt, nombre_negocio ? String(nombre_negocio).trim() : null);
+
+    const creado = db.prepare('SELECT * FROM clientes WHERE id = ?').get(result.lastInsertRowid);
+    res.status(201).json({ empresa: serializarEmpresa(creado) });
+  } catch (err) {
+    if (String(err.message).includes('UNIQUE')) {
+      return res.status(409).json({ error: 'Ya existe una empresa con ese email' });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
 
 /** Datos de facturación (sin credenciales) que se mandan al frontend. */
 function configFacturacion(cliente) {
@@ -1420,4 +1594,5 @@ app.post('/api/conversaciones/:telefono/responder', async (req, res) => {
 const PORT = process.env.PORT || 4100;
 app.listen(PORT, () => {
   console.log(`Envío masivo de WhatsApp corriendo en http://localhost:${PORT}`);
+  iniciarScheduler();
 });

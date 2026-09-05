@@ -215,6 +215,17 @@ agregarColumnaSiFalta('clientes', 'telefono_contacto TEXT');
 agregarColumnaSiFalta('clientes', 'es_admin INTEGER NOT NULL DEFAULT 0');
 
 /**
+ * Recordatorios personalizados por contacto (ej: fecha/hora de una cita,
+ * tipo de servicio) para usar como variables de plantilla, y programación
+ * de envíos (fecha común por campaña o individual por contacto) — ver
+ * campanas.js y scheduler.js.
+ */
+agregarColumnaSiFalta('contactos', "variables_json TEXT NOT NULL DEFAULT '{}'");
+agregarColumnaSiFalta('contactos', 'fecha_recordatorio TEXT');
+agregarColumnaSiFalta('campanas', 'fecha_programada TEXT');
+agregarColumnaSiFalta('campanas', 'contacto_ids_json TEXT');
+
+/**
  * `contactos` y `leads_prospectos` tenían `UNIQUE(telefono)` a nivel de
  * columna (una sola columna) antes del modelo multi-tenant — ese índice
  * viejo no se puede alterar con ALTER TABLE, así que en bases con datos

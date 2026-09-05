@@ -1,7 +1,20 @@
 // Estado en memoria del frontend (sin framework — proyecto chico a propósito).
 let contactos = [];
 const seleccionados = new Set();
-let parametros = []; // [{ tipo: 'fijo'|'nombre', valor: '' }]
+let parametros = []; // [{ tipo: 'fijo'|'nombre'|'variable', valor: '', clave: '' }]
+
+// ==================== EMPRESA ACTIVA (admin) ====================
+// Un admin (Code Repair Tech) puede elegir "para qué empresa estoy
+// trabajando" en la pestaña Empresas — mientras haya una elegida, las
+// pestañas Contactos y Nueva campaña operan sobre ESA empresa en vez de
+// la cuenta del admin.
+let empresas = [];
+let empresaActivaId = ''; // '' = opera sobre la propia cuenta logueada
+
+/** Query string con la empresa activa — vacío si se opera sobre la propia cuenta. */
+function paramsEmpresaActiva() {
+  return empresaActivaId ? `?cliente_id=${encodeURIComponent(empresaActivaId)}` : '';
+}
 
 // ==================== SESIÓN ====================
 // Cualquier fetch que devuelva 401 (sesión vencida o cerrada en otra
@@ -61,6 +74,9 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
     if (btn.dataset.tab === 'campana') {
       document.getElementById('campanaContactosCount').textContent = seleccionados.size;
     }
+    if (btn.dataset.tab === 'empresas') {
+      cargarEmpresas();
+    }
     if (btn.dataset.tab === 'historial') {
       abrirHistorial();
     }
@@ -103,6 +119,10 @@ async function cargarConfig() {
     await prepararBotonConectar('btnAgregarNumero', () => {
       window.location.reload();
     });
+
+    if (data.cliente.es_admin) {
+      document.getElementById('tabBtnEmpresas').classList.remove('hidden');
+    }
 
     if (data.whatsappConfigured) {
       badge.textContent = 'WhatsApp configurado ✓';
@@ -338,7 +358,7 @@ if (formNumeroManual) {
 // ==================== CONTACTOS ====================
 
 async function cargarContactos() {
-  const res = await fetch('/api/contactos');
+  const res = await fetch(`/api/contactos${paramsEmpresaActiva()}`);
   const data = await res.json();
   contactos = data.contactos;
   renderContactos();
@@ -391,7 +411,7 @@ function renderContactos() {
   tbody.querySelectorAll('[data-del]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const id = Number(btn.dataset.del);
-      await fetch(`/api/contactos/${id}`, { method: 'DELETE' });
+      await fetch(`/api/contactos/${id}${paramsEmpresaActiva()}`, { method: 'DELETE' });
       seleccionados.delete(id);
       cargarContactos();
     });
@@ -451,7 +471,7 @@ document.getElementById('btnReiniciarLote').addEventListener('click', () => {
 document.getElementById('btnEliminarTodos').addEventListener('click', async () => {
   if (contactos.length === 0) return;
   if (!confirm(`¿Eliminar los ${contactos.length} contactos? Esta acción no se puede deshacer.`)) return;
-  await fetch('/api/contactos', { method: 'DELETE' });
+  await fetch(`/api/contactos${paramsEmpresaActiva()}`, { method: 'DELETE' });
   seleccionados.clear();
   cargarContactos();
 });
@@ -464,7 +484,7 @@ document.getElementById('formAgregarContacto').addEventListener('submit', async 
   const res = await fetch('/api/contactos', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ telefono, nombre }),
+    body: JSON.stringify({ telefono, nombre, cliente_id: empresaActivaId || undefined }),
   });
   if (res.ok) {
     form.reset();
@@ -482,6 +502,7 @@ document.getElementById('formImportar').addEventListener('submit', async (e) => 
 
   const formData = new FormData();
   formData.append('archivo', archivo);
+  if (empresaActivaId) formData.append('cliente_id', empresaActivaId);
 
   const box = document.getElementById('importarResultado');
   const btn = e.target.querySelector('button[type="submit"]');
@@ -512,6 +533,85 @@ document.getElementById('formImportar').addEventListener('submit', async (e) => 
   }
 });
 
+// ==================== EMPRESAS (panel admin) ====================
+
+async function cargarEmpresas() {
+  const res = await fetch('/api/admin/empresas');
+  if (!res.ok) return;
+  const data = await res.json();
+  empresas = data.empresas || [];
+  renderEmpresas();
+  renderSelectEmpresaActiva();
+}
+
+function renderEmpresas() {
+  document.getElementById('totalEmpresas').textContent = empresas.length;
+  const tbody = document.getElementById('tablaEmpresas');
+  tbody.innerHTML = '';
+  if (empresas.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state">Todavía no creaste ninguna empresa.</div></td></tr>`;
+    return;
+  }
+  empresas.forEach((e) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(e.nombre_negocio || '(sin nombre)')}</td>
+      <td>${escapeHtml(e.email)}</td>
+      <td>${escapeHtml(e.estado)}</td>
+      <td>${e.whatsapp_conectado ? '✓ Conectado' : '—'}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function renderSelectEmpresaActiva() {
+  const select = document.getElementById('selectEmpresaActiva');
+  select.innerHTML = `<option value="">— Mi propia cuenta —</option>` +
+    empresas.map((e) => `<option value="${e.id}">${escapeHtml(e.nombre_negocio || e.email)}</option>`).join('');
+  select.value = empresaActivaId ? String(empresaActivaId) : '';
+}
+
+document.getElementById('selectEmpresaActiva').addEventListener('change', async (e) => {
+  empresaActivaId = e.target.value ? Number(e.target.value) : '';
+  seleccionados.clear();
+  document.getElementById('campanaContactosCount').textContent = 0;
+  await cargarContactos();
+});
+
+document.getElementById('formCrearEmpresa').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const nombre_negocio = document.getElementById('inputEmpresaNombre').value.trim();
+  const email = document.getElementById('inputEmpresaEmail').value.trim();
+  const password = document.getElementById('inputEmpresaPassword').value;
+  const box = document.getElementById('crearEmpresaResultado');
+  const btn = form.querySelector('button[type="submit"]');
+
+  box.classList.remove('hidden', 'error', 'ok');
+  box.textContent = 'Creando…';
+  btn.disabled = true;
+
+  try {
+    const res = await fetch('/api/admin/empresas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nombre_negocio, email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo crear la empresa');
+
+    box.classList.add('ok');
+    box.textContent = `Empresa "${data.empresa.nombre_negocio || data.empresa.email}" creada.`;
+    form.reset();
+    await cargarEmpresas();
+  } catch (err) {
+    box.classList.add('error');
+    box.textContent = err.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 // ==================== CAMPAÑA (parámetros dinámicos) ====================
 
 function renderParametros() {
@@ -524,11 +624,15 @@ function renderParametros() {
       <span class="param-index">{{${idx + 1}}}</span>
       <select data-idx="${idx}" class="param-tipo">
         <option value="nombre" ${p.tipo === 'nombre' ? 'selected' : ''}>Nombre del contacto</option>
+        <option value="variable" ${p.tipo === 'variable' ? 'selected' : ''}>Variable del contacto (CSV)</option>
         <option value="fijo" ${p.tipo === 'fijo' ? 'selected' : ''}>Texto fijo (igual para todos)</option>
       </select>
       <input type="text" data-idx="${idx}" class="param-valor" placeholder="Texto fijo…"
         value="${p.tipo === 'fijo' ? (p.valor || '') : ''}"
-        ${p.tipo === 'nombre' ? 'disabled' : ''} />
+        ${p.tipo === 'fijo' ? '' : 'disabled'} />
+      <input type="text" data-idx="${idx}" class="param-clave" placeholder="Columna del CSV (ej: fecha_cita)"
+        value="${p.tipo === 'variable' ? (p.clave || '') : ''}"
+        ${p.tipo === 'variable' ? '' : 'disabled'} />
       <button type="button" class="btn-danger-sm" data-remove="${idx}" title="Quitar" aria-label="Quitar parámetro ${idx + 1}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
       </button>
@@ -549,6 +653,12 @@ function renderParametros() {
       parametros[idx].valor = e.target.value;
     });
   });
+  cont.querySelectorAll('.param-clave').forEach((inp) => {
+    inp.addEventListener('input', (e) => {
+      const idx = Number(e.target.dataset.idx);
+      parametros[idx].clave = e.target.value;
+    });
+  });
   cont.querySelectorAll('[data-remove]').forEach((btn) => {
     btn.addEventListener('click', () => {
       parametros.splice(Number(btn.dataset.remove), 1);
@@ -558,8 +668,12 @@ function renderParametros() {
 }
 
 document.getElementById('btnAgregarParametro').addEventListener('click', () => {
-  parametros.push({ tipo: 'nombre', valor: '' });
+  parametros.push({ tipo: 'nombre', valor: '', clave: '' });
   renderParametros();
+});
+
+document.getElementById('checkFechaIndividual').addEventListener('change', (e) => {
+  document.getElementById('campoFechaComun').classList.toggle('hidden', e.target.checked);
 });
 
 document.getElementById('btnEnviarCampana').addEventListener('click', async () => {
@@ -567,6 +681,8 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
   const idioma = document.getElementById('templateIdioma').value.trim() || 'es';
   const contacto_ids = Array.from(seleccionados);
   const box = document.getElementById('campanaProgreso');
+  const individual = document.getElementById('checkFechaIndividual').checked;
+  const fechaProgramada = document.getElementById('inputFechaProgramada').value;
 
   if (!template_nombre) {
     alert('Escribí el nombre exacto de la plantilla');
@@ -576,20 +692,31 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
     alert('No hay contactos seleccionados (elegilos en la pestaña "Contactos")');
     return;
   }
-  if (!confirm(`¿Enviar "${template_nombre}" a ${contacto_ids.length} contactos?`)) return;
+  const confirmacion = individual
+    ? `¿Programar "${template_nombre}" para cada uno de los ${contacto_ids.length} contactos seleccionados, según su propia fecha de recordatorio?`
+    : fechaProgramada
+      ? `¿Programar "${template_nombre}" para ${contacto_ids.length} contactos el ${new Date(fechaProgramada).toLocaleString('es-CO')}?`
+      : `¿Enviar "${template_nombre}" a ${contacto_ids.length} contactos ahora mismo?`;
+  if (!confirm(confirmacion)) return;
 
   const btn = document.getElementById('btnEnviarCampana');
   btn.disabled = true;
   btn.classList.add('is-loading');
   box.classList.remove('hidden', 'error', 'ok');
-  box.textContent = 'Iniciando envío…';
+  box.textContent = individual ? 'Creando recordatorios…' : 'Iniciando envío…';
 
   try {
     const formData = new FormData();
+    if (empresaActivaId) formData.append('cliente_id', empresaActivaId);
     formData.append('template_nombre', template_nombre);
     formData.append('idioma', idioma);
     formData.append('contacto_ids', JSON.stringify(contacto_ids));
     formData.append('parametros', JSON.stringify(parametros));
+    if (individual) {
+      formData.append('individual', 'true');
+    } else if (fechaProgramada) {
+      formData.append('fecha_programada', fechaProgramada);
+    }
     const archivoImagen = document.getElementById('templateImagen').files[0];
     if (archivoImagen) formData.append('imagen', archivoImagen);
 
@@ -598,7 +725,22 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
     if (!res.ok) throw new Error(data.error || 'Error al crear la campaña');
 
     btn.classList.remove('is-loading');
-    pollProgresoCampana(data.campana_id, data.total, box, btn);
+
+    if (individual) {
+      box.classList.add(data.omitidos.length > 0 ? 'error' : 'ok');
+      let texto = `Se programaron ${data.creadas} recordatorios individuales de ${data.total} contactos.`;
+      if (data.omitidos.length > 0) {
+        texto += `\nOmitidos (sin fecha de recordatorio cargada): ${data.omitidos.join(', ')}`;
+      }
+      box.textContent = texto;
+      btn.disabled = false;
+    } else if (data.programada) {
+      box.classList.add('ok');
+      box.textContent = `Campaña programada para ${new Date(fechaProgramada).toLocaleString('es-CO')}. Se mandará sola llegado el momento — revisá "Historial".`;
+      btn.disabled = false;
+    } else {
+      pollProgresoCampana(data.campana_id, data.total, box, btn);
+    }
   } catch (err) {
     box.classList.add('error');
     box.textContent = err.message;
@@ -609,7 +751,7 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
 
 async function pollProgresoCampana(campanaId, total, box, btn) {
   const interval = setInterval(async () => {
-    const res = await fetch(`/api/campanas/${campanaId}`);
+    const res = await fetch(`/api/campanas/${campanaId}${paramsEmpresaActiva()}`);
     const data = await res.json();
     const c = data.campana;
     const procesados = c.enviados + c.fallidos;
@@ -713,7 +855,10 @@ function renderCampanas() {
       <td>${c.id}</td>
       <td>${escapeHtml(c.template_nombre)}</td>
       <td>${formatearFechaHora(c.creado_en)}</td>
-      <td><span class="estado-pill estado-${c.estado}">${c.estado}</span></td>
+      <td>
+        <span class="estado-pill estado-${c.estado}">${c.estado}</span>
+        ${c.estado === 'programada' && c.fecha_programada ? `<div class="muted" style="margin-top:4px;font-size:11px;">Para: ${formatearFechaHora(c.fecha_programada)}</div>` : ''}
+      </td>
       <td>${c.enviados}</td>
       <td>${c.entregados}</td>
       <td>${c.leidos}</td>

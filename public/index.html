@@ -62,6 +62,10 @@
   </div>
 
   <nav id="navTabs" class="tabs">
+    <button class="tab-btn hidden" data-tab="empresas" id="tabBtnEmpresas">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 9h1m4 0h1m-6 4h1m4 0h1m-6 4h1m4 0h1" /></svg>
+      Empresas
+    </button>
     <button class="tab-btn active" data-tab="contactos">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></svg>
       Contactos
@@ -86,11 +90,65 @@
   </nav>
 
   <main id="appMain">
+    <!-- ===================== TAB: EMPRESAS (solo admin) ===================== -->
+    <section id="tab-empresas" class="tab-panel">
+      <div class="card">
+        <h2>Empresa activa</h2>
+        <p class="muted">Elegí para qué empresa cliente vas a subir contactos y armar campañas en las pestañas
+          "Contactos" y "Nueva campaña". Mientras no elijas ninguna, esas pestañas operan sobre tu propia cuenta.</p>
+        <div class="field">
+          <label for="selectEmpresaActiva" class="sr-only">Empresa activa</label>
+          <select id="selectEmpresaActiva"></select>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Crear empresa nueva</h2>
+        <form id="formCrearEmpresa" class="inline-form">
+          <div class="field">
+            <label for="inputEmpresaNombre" class="sr-only">Nombre del negocio</label>
+            <input type="text" id="inputEmpresaNombre" placeholder="Nombre del negocio (ej: Odontología Sonrisa)" autocomplete="off" required />
+          </div>
+          <div class="field">
+            <label for="inputEmpresaEmail" class="sr-only">Email</label>
+            <input type="email" id="inputEmpresaEmail" placeholder="Email de la empresa" autocomplete="off" required />
+          </div>
+          <div class="field">
+            <label for="inputEmpresaPassword" class="sr-only">Contraseña</label>
+            <input type="text" id="inputEmpresaPassword" placeholder="Contraseña (mín. 8 caracteres)" autocomplete="off" required />
+          </div>
+          <button type="submit" class="btn btn-primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+            Crear empresa
+          </button>
+        </form>
+        <div id="crearEmpresaResultado" class="result-box hidden"></div>
+      </div>
+
+      <div class="card">
+        <h2>Empresas (<span id="totalEmpresas">0</span>)</h2>
+        <div class="table-wrap">
+          <table class="tabla">
+            <thead>
+              <tr>
+                <th>Empresa</th>
+                <th>Email</th>
+                <th>Estado</th>
+                <th>WhatsApp</th>
+              </tr>
+            </thead>
+            <tbody id="tablaEmpresas"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
     <!-- ===================== TAB: CONTACTOS ===================== -->
     <section id="tab-contactos" class="tab-panel active">
       <div class="card">
         <h2>Importar contactos (CSV o Excel)</h2>
         <p class="muted">Columnas esperadas: <code>telefono</code> y <code>nombre</code> (podés usar <code>phone</code>/<code>numero</code>/<code>name</code> también). El teléfono se normaliza solo (agrega el 57 de Colombia si falta). Formatos aceptados: <code>.csv</code>, <code>.xlsx</code>, <code>.xls</code>.</p>
+        <p class="muted">Cualquier otra columna (ej: <code>fecha_cita</code>, <code>hora</code>, <code>servicio</code>) queda disponible como variable de plantilla al armar la campaña. Una columna <code>fecha_envio</code> programa el recordatorio individual de ese contacto (pestaña "Nueva campaña", opción "Fecha individual por contacto").</p>
         <form id="formImportar">
           <label for="inputArchivo" class="sr-only">Archivo de contactos</label>
           <input type="file" name="archivo" id="inputArchivo" accept=".csv,.xlsx,.xls" required />
@@ -174,12 +232,23 @@
         <input type="file" id="templateImagen" accept=".jpg,.jpeg,.png,.mp4,.3gp,.3gpp" />
 
         <h3>Parámetros de la plantilla ({{1}}, {{2}}, …)</h3>
-        <p class="muted">Agregá uno por cada <code>{{N}}</code> que tenga tu plantilla, en orden. "Nombre del contacto" personaliza automáticamente por persona.</p>
+        <p class="muted">Agregá uno por cada <code>{{N}}</code> que tenga tu plantilla, en orden. "Nombre del contacto" personaliza automáticamente por persona; "Variable del contacto" toma un dato cargado por CSV (ej: <code>fecha_cita</code>).</p>
         <div id="parametrosLista"></div>
         <button id="btnAgregarParametro" type="button" class="btn btn-sm btn-outline">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
           Agregar parámetro
         </button>
+
+        <h3>Programación (opcional)</h3>
+        <p class="muted">Sin elegir nada, la campaña se manda de inmediato.</p>
+        <label class="checkbox-inline">
+          <input type="checkbox" id="checkFechaIndividual" />
+          Fecha individual por contacto (usa el <code>fecha_envio</code> propio de cada contacto, cargado por CSV)
+        </label>
+        <div id="campoFechaComun">
+          <label for="inputFechaProgramada">Programar para (fecha común para todos)</label>
+          <input type="datetime-local" id="inputFechaProgramada" style="max-width: 260px" />
+        </div>
 
         <div class="send-bar">
           <button id="btnEnviarCampana" class="btn btn-primary btn-lg">
