@@ -92,53 +92,171 @@
   <main id="appMain">
     <!-- ===================== TAB: EMPRESAS (solo admin) ===================== -->
     <section id="tab-empresas" class="tab-panel">
-      <div class="card">
-        <h2>Empresa activa</h2>
-        <p class="muted">Elegí para qué empresa cliente vas a subir contactos y armar campañas en las pestañas
-          "Contactos" y "Nueva campaña". Mientras no elijas ninguna, esas pestañas operan sobre tu propia cuenta.</p>
-        <div class="field">
-          <label for="selectEmpresaActiva" class="sr-only">Empresa activa</label>
-          <select id="selectEmpresaActiva"></select>
+      <div id="empresasListado">
+        <div class="card">
+          <h2>Crear empresa nueva</h2>
+          <p class="muted">Una empresa (ej: una odontología) no se loguea ni conecta su propio WhatsApp — es un
+            espacio propio dentro de tu panel: vos le subís los contactos, le elegís con cuál de tus números
+            enviar, y armás sus campañas desde "Gestionar".</p>
+          <form id="formCrearEmpresa" class="inline-form">
+            <div class="field">
+              <label for="inputEmpresaNombre" class="sr-only">Nombre del negocio</label>
+              <input type="text" id="inputEmpresaNombre" placeholder="Nombre del negocio (ej: Odontología Sonrisa)" autocomplete="off" required />
+            </div>
+            <button type="submit" class="btn btn-primary">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+              Crear empresa
+            </button>
+          </form>
+          <div id="crearEmpresaResultado" class="result-box hidden"></div>
+        </div>
+
+        <div class="card">
+          <h2>Empresas (<span id="totalEmpresas">0</span>)</h2>
+          <div class="table-wrap">
+            <table class="tabla">
+              <thead>
+                <tr>
+                  <th>Empresa</th>
+                  <th>Número asignado</th>
+                  <th>Conectada</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="tablaEmpresas"></tbody>
+            </table>
+          </div>
         </div>
       </div>
 
-      <div class="card">
-        <h2>Crear empresa nueva</h2>
-        <form id="formCrearEmpresa" class="inline-form">
-          <div class="field">
-            <label for="inputEmpresaNombre" class="sr-only">Nombre del negocio</label>
-            <input type="text" id="inputEmpresaNombre" placeholder="Nombre del negocio (ej: Odontología Sonrisa)" autocomplete="off" required />
-          </div>
-          <div class="field">
-            <label for="inputEmpresaEmail" class="sr-only">Email</label>
-            <input type="email" id="inputEmpresaEmail" placeholder="Email de la empresa" autocomplete="off" required />
-          </div>
-          <div class="field">
-            <label for="inputEmpresaPassword" class="sr-only">Contraseña</label>
-            <input type="text" id="inputEmpresaPassword" placeholder="Contraseña (mín. 8 caracteres)" autocomplete="off" required />
-          </div>
-          <button type="submit" class="btn btn-primary">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-            Crear empresa
+      <div id="empresaDetalle" class="hidden">
+        <div class="card">
+          <button type="button" id="btnVolverEmpresas" class="btn btn-sm btn-outline">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+            Volver a empresas
           </button>
-        </form>
-        <div id="crearEmpresaResultado" class="result-box hidden"></div>
-      </div>
+          <h2 style="margin-top: 14px;" id="empresaDetalleNombre"></h2>
 
-      <div class="card">
-        <h2>Empresas (<span id="totalEmpresas">0</span>)</h2>
-        <div class="table-wrap">
-          <table class="tabla">
-            <thead>
-              <tr>
-                <th>Empresa</th>
-                <th>Email</th>
-                <th>Estado</th>
-                <th>WhatsApp</th>
-              </tr>
-            </thead>
-            <tbody id="tablaEmpresas"></tbody>
-          </table>
+          <h3>Número de WhatsApp para esta empresa</h3>
+          <p class="muted">Elegí uno de los números que ya conectaste en la pestaña "Webhook".</p>
+          <form id="formNumeroEmpresa" class="inline-form">
+            <div class="field">
+              <label for="selectNumeroEmpresa" class="sr-only">Número</label>
+              <select id="selectNumeroEmpresa"></select>
+            </div>
+            <button type="submit" class="btn btn-outline">Guardar</button>
+          </form>
+          <div id="numeroEmpresaResultado" class="result-box hidden"></div>
+        </div>
+
+        <div class="card">
+          <h2>Importar contactos (CSV o Excel)</h2>
+          <p class="muted">Columnas esperadas: <code>telefono</code> y <code>nombre</code> (también
+            <code>phone</code>/<code>numero</code>/<code>name</code>). Cualquier otra columna (ej:
+            <code>fecha_cita</code>, <code>hora</code>, <code>servicio</code>) queda disponible como variable de
+            plantilla. Una columna <code>fecha_envio</code> programa el recordatorio individual de ese contacto.</p>
+          <form id="formImportarEmpresa">
+            <label for="inputArchivoEmpresa" class="sr-only">Archivo de contactos</label>
+            <input type="file" id="inputArchivoEmpresa" accept=".csv,.xlsx,.xls" required />
+            <div class="send-bar" style="margin-top: 14px; padding-top: 0; border-top: none;">
+              <button type="submit" class="btn btn-primary">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M17 8l-5-5-5 5" /><path d="M12 3v12" /></svg>
+                Importar
+              </button>
+            </div>
+          </form>
+          <div id="importarResultadoEmpresa" class="result-box hidden"></div>
+        </div>
+
+        <div class="card">
+          <h2>Agregar contacto manual</h2>
+          <form id="formAgregarContactoEmpresa" class="inline-form">
+            <div class="field">
+              <input type="text" name="telefono" placeholder="Teléfono (ej: 3001234567)" autocomplete="off" required />
+            </div>
+            <div class="field">
+              <input type="text" name="nombre" placeholder="Nombre (opcional)" autocomplete="off" />
+            </div>
+            <button type="submit" class="btn btn-outline">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+              Agregar
+            </button>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2>Contactos de esta empresa (<span id="totalContactosEmpresa">0</span>)</h2>
+            <div class="header-actions">
+              <span id="seleccionadosCountEmpresa" class="muted">0 seleccionados</span>
+              <button id="btnSeleccionarTodosEmpresa" class="btn btn-sm btn-outline">Seleccionar todos</button>
+              <button id="btnEliminarTodosEmpresa" class="btn btn-sm btn-danger">Eliminar todos</button>
+            </div>
+          </div>
+          <div class="lote-bar">
+            <label for="tamanoLoteEmpresa" class="sr-only">Tamaño del lote</label>
+            <input type="number" id="tamanoLoteEmpresa" value="100" min="1" />
+            <button type="button" id="btnSeleccionarLoteEmpresa" class="btn btn-sm btn-outline">Seleccionar siguiente lote</button>
+            <button type="button" id="btnReiniciarLoteEmpresa" class="btn btn-sm btn-outline">Reiniciar lote</button>
+          </div>
+          <div class="table-wrap">
+            <table class="tabla">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>Teléfono</th>
+                  <th>Nombre</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="tablaContactosEmpresa"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Nueva campaña para esta empresa</h2>
+          <p class="muted"><strong id="empresaCampanaContactosCount">0</strong> contactos seleccionados arriba.</p>
+
+          <label for="templateNombreEmpresa">Nombre exacto de la plantilla (tal cual está aprobada en Meta)</label>
+          <input type="text" id="templateNombreEmpresa" placeholder="ej: recordatorio_cita" autocomplete="off" />
+
+          <label for="templateIdiomaEmpresa">Idioma</label>
+          <input type="text" id="templateIdiomaEmpresa" value="es" style="max-width: 120px" autocomplete="off" />
+
+          <label for="templateImagenEmpresa">Media del encabezado (opcional — imagen .jpg/.png máx 5MB o video .mp4 máx 16MB)</label>
+          <input type="file" id="templateImagenEmpresa" accept=".jpg,.jpeg,.png,.mp4,.3gp,.3gpp" />
+
+          <h3>Parámetros de la plantilla ({{1}}, {{2}}, …)</h3>
+          <p class="muted">"Variable del contacto" toma un dato cargado por CSV (ej: <code>fecha_cita</code>).</p>
+          <div id="parametrosListaEmpresa"></div>
+          <button id="btnAgregarParametroEmpresa" type="button" class="btn btn-sm btn-outline">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+            Agregar parámetro
+          </button>
+
+          <h3>Programación (opcional)</h3>
+          <p class="muted">Sin elegir nada, la campaña se manda de inmediato.</p>
+          <label class="checkbox-inline">
+            <input type="checkbox" id="checkFechaIndividualEmpresa" />
+            Fecha individual por contacto (usa el <code>fecha_envio</code> propio de cada contacto)
+          </label>
+          <div id="campoFechaComunEmpresa">
+            <label for="inputFechaProgramadaEmpresa">Programar para (fecha común para todos)</label>
+            <input type="datetime-local" id="inputFechaProgramadaEmpresa" style="max-width: 260px" />
+          </div>
+          <label class="checkbox-inline">
+            <input type="checkbox" id="checkRecurrenteMensualEmpresa" />
+            Repetir cada mes (mismo día — ej: recordatorio de una cita mensual)
+          </label>
+
+          <div class="send-bar">
+            <button id="btnEnviarCampanaEmpresa" class="btn btn-primary btn-lg">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg>
+              Enviar campaña
+            </button>
+          </div>
+          <div id="empresaCampanaProgreso" class="result-box hidden"></div>
         </div>
       </div>
     </section>
@@ -249,6 +367,10 @@
           <label for="inputFechaProgramada">Programar para (fecha común para todos)</label>
           <input type="datetime-local" id="inputFechaProgramada" style="max-width: 260px" />
         </div>
+        <label class="checkbox-inline">
+          <input type="checkbox" id="checkRecurrenteMensual" />
+          Repetir cada mes (mismo día — ej: recordatorio de una cita mensual)
+        </label>
 
         <div class="send-bar">
           <button id="btnEnviarCampana" class="btn btn-primary btn-lg">

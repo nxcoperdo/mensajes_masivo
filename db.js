@@ -226,6 +226,24 @@ agregarColumnaSiFalta('campanas', 'fecha_programada TEXT');
 agregarColumnaSiFalta('campanas', 'contacto_ids_json TEXT');
 
 /**
+ * Una "empresa" creada desde el panel admin (ver server.js, sección ADMIN)
+ * es una fila más de `clientes` pero SIN login real: su email/contraseña se
+ * generan al azar y nunca se muestran, porque el único usuario que existe
+ * de verdad en el aplicativo es el admin — él hace todo (contactos,
+ * plantillas, envíos) desde adentro de cada empresa. Esta columna es solo
+ * para distinguir esas filas en la UI, no cambia ningún permiso.
+ */
+agregarColumnaSiFalta('clientes', 'es_empresa_gestionada INTEGER NOT NULL DEFAULT 0');
+
+/**
+ * Si está prendida, al completarse el envío (`procesarCampana` en
+ * campanas.js) se clona la campaña para el mismo día del mes siguiente —
+ * pensado para recordatorios que se repiten todos los meses (ej: una cita
+ * mensual) sin tener que volver a cargarlos a mano.
+ */
+agregarColumnaSiFalta('campanas', 'recurrente_mensual INTEGER NOT NULL DEFAULT 0');
+
+/**
  * `contactos` y `leads_prospectos` tenían `UNIQUE(telefono)` a nivel de
  * columna (una sola columna) antes del modelo multi-tenant — ese índice
  * viejo no se puede alterar con ALTER TABLE, así que en bases con datos

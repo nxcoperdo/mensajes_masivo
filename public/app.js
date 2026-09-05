@@ -3,18 +3,10 @@ let contactos = [];
 const seleccionados = new Set();
 let parametros = []; // [{ tipo: 'fijo'|'nombre'|'variable', valor: '', clave: '' }]
 
-// ==================== EMPRESA ACTIVA (admin) ====================
-// Un admin (Code Repair Tech) puede elegir "para qué empresa estoy
-// trabajando" en la pestaña Empresas — mientras haya una elegida, las
-// pestañas Contactos y Nueva campaña operan sobre ESA empresa en vez de
-// la cuenta del admin.
+// Empresas creadas desde el panel admin — cada una tiene su propio espacio de
+// contactos/campañas (ver sección EMPRESAS más abajo); estas pestañas de acá
+// arriba (Contactos/Nueva campaña) siempre operan sobre la cuenta logueada.
 let empresas = [];
-let empresaActivaId = ''; // '' = opera sobre la propia cuenta logueada
-
-/** Query string con la empresa activa — vacío si se opera sobre la propia cuenta. */
-function paramsEmpresaActiva() {
-  return empresaActivaId ? `?cliente_id=${encodeURIComponent(empresaActivaId)}` : '';
-}
 
 // ==================== SESIÓN ====================
 // Cualquier fetch que devuelva 401 (sesión vencida o cerrada en otra
@@ -358,7 +350,7 @@ if (formNumeroManual) {
 // ==================== CONTACTOS ====================
 
 async function cargarContactos() {
-  const res = await fetch(`/api/contactos${paramsEmpresaActiva()}`);
+  const res = await fetch('/api/contactos');
   const data = await res.json();
   contactos = data.contactos;
   renderContactos();
@@ -411,7 +403,7 @@ function renderContactos() {
   tbody.querySelectorAll('[data-del]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const id = Number(btn.dataset.del);
-      await fetch(`/api/contactos/${id}${paramsEmpresaActiva()}`, { method: 'DELETE' });
+      await fetch(`/api/contactos/${id}`, { method: 'DELETE' });
       seleccionados.delete(id);
       cargarContactos();
     });
@@ -471,7 +463,7 @@ document.getElementById('btnReiniciarLote').addEventListener('click', () => {
 document.getElementById('btnEliminarTodos').addEventListener('click', async () => {
   if (contactos.length === 0) return;
   if (!confirm(`¿Eliminar los ${contactos.length} contactos? Esta acción no se puede deshacer.`)) return;
-  await fetch(`/api/contactos${paramsEmpresaActiva()}`, { method: 'DELETE' });
+  await fetch('/api/contactos', { method: 'DELETE' });
   seleccionados.clear();
   cargarContactos();
 });
@@ -484,7 +476,7 @@ document.getElementById('formAgregarContacto').addEventListener('submit', async 
   const res = await fetch('/api/contactos', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ telefono, nombre, cliente_id: empresaActivaId || undefined }),
+    body: JSON.stringify({ telefono, nombre }),
   });
   if (res.ok) {
     form.reset();
@@ -502,7 +494,6 @@ document.getElementById('formImportar').addEventListener('submit', async (e) => 
 
   const formData = new FormData();
   formData.append('archivo', archivo);
-  if (empresaActivaId) formData.append('cliente_id', empresaActivaId);
 
   const box = document.getElementById('importarResultado');
   const btn = e.target.querySelector('button[type="submit"]');
@@ -534,6 +525,13 @@ document.getElementById('formImportar').addEventListener('submit', async (e) => 
 });
 
 // ==================== EMPRESAS (panel admin) ====================
+//
+// Cada empresa (ej: una odontología) es un espacio propio dentro del panel
+// del admin: no tiene login ni conecta su propio WhatsApp — el admin elige
+// acá con cuál de SUS números ya conectados manda, sube sus contactos y
+// arma sus campañas. Reusa exactamente los mismos endpoints de contactos y
+// campañas que las pestañas generales, pasando siempre `cliente_id =
+// empresaDetalleId` en vez de operar sobre la cuenta logueada.
 
 async function cargarEmpresas() {
   const res = await fetch('/api/admin/empresas');
@@ -541,7 +539,6 @@ async function cargarEmpresas() {
   const data = await res.json();
   empresas = data.empresas || [];
   renderEmpresas();
-  renderSelectEmpresaActiva();
 }
 
 function renderEmpresas() {
@@ -556,34 +553,21 @@ function renderEmpresas() {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${escapeHtml(e.nombre_negocio || '(sin nombre)')}</td>
-      <td>${escapeHtml(e.email)}</td>
-      <td>${escapeHtml(e.estado)}</td>
-      <td>${e.whatsapp_conectado ? '✓ Conectado' : '—'}</td>
+      <td>${e.phone_number_id ? escapeHtml(e.phone_number_id) : '<span class="muted">Sin asignar</span>'}</td>
+      <td>${e.whatsapp_conectado ? '✓' : '—'}</td>
+      <td><button class="btn btn-sm btn-outline" data-gestionar="${e.id}">Gestionar</button></td>
     `;
     tbody.appendChild(tr);
   });
+  tbody.querySelectorAll('[data-gestionar]').forEach((btn) => {
+    btn.addEventListener('click', () => abrirEmpresa(Number(btn.dataset.gestionar)));
+  });
 }
-
-function renderSelectEmpresaActiva() {
-  const select = document.getElementById('selectEmpresaActiva');
-  select.innerHTML = `<option value="">— Mi propia cuenta —</option>` +
-    empresas.map((e) => `<option value="${e.id}">${escapeHtml(e.nombre_negocio || e.email)}</option>`).join('');
-  select.value = empresaActivaId ? String(empresaActivaId) : '';
-}
-
-document.getElementById('selectEmpresaActiva').addEventListener('change', async (e) => {
-  empresaActivaId = e.target.value ? Number(e.target.value) : '';
-  seleccionados.clear();
-  document.getElementById('campanaContactosCount').textContent = 0;
-  await cargarContactos();
-});
 
 document.getElementById('formCrearEmpresa').addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target;
   const nombre_negocio = document.getElementById('inputEmpresaNombre').value.trim();
-  const email = document.getElementById('inputEmpresaEmail').value.trim();
-  const password = document.getElementById('inputEmpresaPassword').value;
   const box = document.getElementById('crearEmpresaResultado');
   const btn = form.querySelector('button[type="submit"]');
 
@@ -595,13 +579,13 @@ document.getElementById('formCrearEmpresa').addEventListener('submit', async (e)
     const res = await fetch('/api/admin/empresas', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nombre_negocio, email, password }),
+      body: JSON.stringify({ nombre_negocio }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'No se pudo crear la empresa');
 
     box.classList.add('ok');
-    box.textContent = `Empresa "${data.empresa.nombre_negocio || data.empresa.email}" creada.`;
+    box.textContent = `Empresa "${data.empresa.nombre_negocio}" creada.`;
     form.reset();
     await cargarEmpresas();
   } catch (err) {
@@ -612,12 +596,330 @@ document.getElementById('formCrearEmpresa').addEventListener('submit', async (e)
   }
 });
 
+// ---- Detalle de una empresa: número asignado + sus contactos + sus campañas ----
+
+let empresaDetalleId = null;
+let empresaContactos = [];
+const empresaSeleccionados = new Set();
+let empresaParametros = [];
+let empresaLoteOffset = 0;
+
+async function abrirEmpresa(id) {
+  empresaDetalleId = id;
+  const empresa = empresas.find((e) => e.id === id);
+  document.getElementById('empresaDetalleNombre').textContent = empresa?.nombre_negocio || '';
+  document.getElementById('empresasListado').classList.add('hidden');
+  document.getElementById('empresaDetalle').classList.remove('hidden');
+
+  empresaSeleccionados.clear();
+  empresaLoteOffset = 0;
+  empresaParametros = [];
+  renderParametrosEmpresa();
+  document.getElementById('empresaCampanaProgreso').classList.add('hidden');
+
+  await Promise.all([cargarNumerosParaEmpresa(), cargarContactosEmpresa()]);
+}
+
+document.getElementById('btnVolverEmpresas').addEventListener('click', () => {
+  empresaDetalleId = null;
+  document.getElementById('empresaDetalle').classList.add('hidden');
+  document.getElementById('empresasListado').classList.remove('hidden');
+});
+
+/** Números ya conectados por el admin (misma fuente que la pestaña Webhook). */
+async function cargarNumerosParaEmpresa() {
+  const res = await fetch('/api/whatsapp/numeros');
+  const data = await res.json();
+  const select = document.getElementById('selectNumeroEmpresa');
+  const empresa = empresas.find((e) => e.id === empresaDetalleId);
+  select.innerHTML = `<option value="">— Sin asignar —</option>` +
+    data.numeros.map((n) => `<option value="${n.id}">${escapeHtml(n.etiqueta || n.phone_number_id)}</option>`).join('');
+  const actual = data.numeros.find((n) => n.phone_number_id === empresa?.phone_number_id);
+  select.value = actual ? String(actual.id) : '';
+}
+
+document.getElementById('formNumeroEmpresa').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const whatsapp_numero_id = document.getElementById('selectNumeroEmpresa').value;
+  const box = document.getElementById('numeroEmpresaResultado');
+  box.classList.remove('hidden', 'error', 'ok');
+  box.textContent = 'Guardando…';
+
+  try {
+    const res = await fetch(`/api/admin/empresas/${empresaDetalleId}/numero`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ whatsapp_numero_id }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo asignar el número');
+    empresas = empresas.map((e) => (e.id === data.empresa.id ? { ...e, ...data.empresa } : e));
+    box.classList.add('ok');
+    box.textContent = 'Número asignado.';
+  } catch (err) {
+    box.classList.add('error');
+    box.textContent = err.message;
+  }
+});
+
+/** Query string con la empresa que se está gestionando — la usan todos los fetch de este bloque. */
+function paramsEmpresaDetalle() {
+  return `?cliente_id=${encodeURIComponent(empresaDetalleId)}`;
+}
+
+async function cargarContactosEmpresa() {
+  const res = await fetch(`/api/contactos${paramsEmpresaDetalle()}`);
+  const data = await res.json();
+  empresaContactos = data.contactos;
+  renderContactosEmpresa();
+}
+
+function renderContactosEmpresa() {
+  const tbody = document.getElementById('tablaContactosEmpresa');
+  tbody.innerHTML = '';
+
+  if (empresaContactos.length === 0) {
+    tbody.innerHTML = `
+      <tr><td colspan="4">
+        <div class="empty-state">
+          ${ICONO_CONTACTOS_VACIO}
+          <div>Todavía no cargaste contactos para esta empresa.</div>
+        </div>
+      </td></tr>
+    `;
+    document.getElementById('totalContactosEmpresa').textContent = 0;
+    actualizarContadorSeleccionEmpresa();
+    return;
+  }
+
+  empresaContactos.forEach((c) => {
+    const tr = document.createElement('tr');
+    const checked = empresaSeleccionados.has(c.id) ? 'checked' : '';
+    tr.innerHTML = `
+      <td><input type="checkbox" data-id="${c.id}" ${checked} /></td>
+      <td>${c.telefono}</td>
+      <td>${c.nombre || '<span class="muted">(sin nombre)</span>'}</td>
+      <td><button class="btn btn-sm btn-outline" data-del="${c.id}">${ICONO_ELIMINAR} Eliminar</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+  document.getElementById('totalContactosEmpresa').textContent = empresaContactos.length;
+  actualizarContadorSeleccionEmpresa();
+
+  tbody.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    cb.addEventListener('change', (e) => {
+      const id = Number(e.target.dataset.id);
+      if (e.target.checked) empresaSeleccionados.add(id);
+      else empresaSeleccionados.delete(id);
+      actualizarContadorSeleccionEmpresa();
+    });
+  });
+  tbody.querySelectorAll('[data-del]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = Number(btn.dataset.del);
+      await fetch(`/api/contactos/${id}${paramsEmpresaDetalle()}`, { method: 'DELETE' });
+      empresaSeleccionados.delete(id);
+      cargarContactosEmpresa();
+    });
+  });
+}
+
+function actualizarContadorSeleccionEmpresa() {
+  document.getElementById('seleccionadosCountEmpresa').textContent = `${empresaSeleccionados.size} seleccionados`;
+  document.getElementById('empresaCampanaContactosCount').textContent = empresaSeleccionados.size;
+}
+
+document.getElementById('btnSeleccionarTodosEmpresa').addEventListener('click', () => {
+  const todosSeleccionados = empresaContactos.every((c) => empresaSeleccionados.has(c.id));
+  if (todosSeleccionados) {
+    empresaContactos.forEach((c) => empresaSeleccionados.delete(c.id));
+  } else {
+    empresaContactos.forEach((c) => empresaSeleccionados.add(c.id));
+  }
+  renderContactosEmpresa();
+});
+
+document.getElementById('btnSeleccionarLoteEmpresa').addEventListener('click', () => {
+  if (empresaContactos.length === 0) return;
+  const tamano = Math.max(1, Number(document.getElementById('tamanoLoteEmpresa').value) || 100);
+  if (empresaLoteOffset >= empresaContactos.length) empresaLoteOffset = 0;
+
+  const lote = empresaContactos.slice(empresaLoteOffset, empresaLoteOffset + tamano);
+  empresaSeleccionados.clear();
+  lote.forEach((c) => empresaSeleccionados.add(c.id));
+  empresaLoteOffset += lote.length;
+  renderContactosEmpresa();
+});
+
+document.getElementById('btnReiniciarLoteEmpresa').addEventListener('click', () => {
+  empresaLoteOffset = 0;
+});
+
+document.getElementById('btnEliminarTodosEmpresa').addEventListener('click', async () => {
+  if (empresaContactos.length === 0) return;
+  if (!confirm(`¿Eliminar los ${empresaContactos.length} contactos de esta empresa? Esta acción no se puede deshacer.`)) return;
+  await fetch(`/api/contactos${paramsEmpresaDetalle()}`, { method: 'DELETE' });
+  empresaSeleccionados.clear();
+  cargarContactosEmpresa();
+});
+
+document.getElementById('formAgregarContactoEmpresa').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const telefono = form.telefono.value.trim();
+  const nombre = form.nombre.value.trim();
+  const res = await fetch('/api/contactos', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ telefono, nombre, cliente_id: empresaDetalleId }),
+  });
+  if (res.ok) {
+    form.reset();
+    cargarContactosEmpresa();
+  } else {
+    const data = await res.json();
+    alert(data.error || 'No se pudo agregar el contacto');
+  }
+});
+
+document.getElementById('formImportarEmpresa').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const archivo = document.getElementById('inputArchivoEmpresa').files[0];
+  if (!archivo) return;
+
+  const formData = new FormData();
+  formData.append('archivo', archivo);
+  formData.append('cliente_id', empresaDetalleId);
+
+  const box = document.getElementById('importarResultadoEmpresa');
+  const btn = e.target.querySelector('button[type="submit"]');
+  box.classList.remove('hidden', 'error', 'ok');
+  box.textContent = 'Importando…';
+  btn.disabled = true;
+  btn.classList.add('is-loading');
+
+  try {
+    const res = await fetch('/api/contactos/importar', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Error al importar');
+
+    box.classList.add('ok');
+    let texto = `Importados: ${data.importados} de ${data.total_filas} filas.`;
+    if (data.invalidos.length > 0) {
+      texto += `\nNúmeros inválidos (omitidos): ${data.invalidos.join(', ')}`;
+    }
+    box.textContent = texto;
+    document.getElementById('formImportarEmpresa').reset();
+    cargarContactosEmpresa();
+  } catch (err) {
+    box.classList.add('error');
+    box.textContent = err.message;
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove('is-loading');
+  }
+});
+
+function renderParametrosEmpresa() {
+  renderParametrosEn(document.getElementById('parametrosListaEmpresa'), empresaParametros, () => renderParametrosEmpresa());
+}
+
+document.getElementById('btnAgregarParametroEmpresa').addEventListener('click', () => {
+  empresaParametros.push({ tipo: 'nombre', valor: '', clave: '' });
+  renderParametrosEmpresa();
+});
+
+document.getElementById('checkFechaIndividualEmpresa').addEventListener('change', (e) => {
+  document.getElementById('campoFechaComunEmpresa').classList.toggle('hidden', e.target.checked);
+});
+
+document.getElementById('btnEnviarCampanaEmpresa').addEventListener('click', async () => {
+  const template_nombre = document.getElementById('templateNombreEmpresa').value.trim();
+  const idioma = document.getElementById('templateIdiomaEmpresa').value.trim() || 'es';
+  const contacto_ids = Array.from(empresaSeleccionados);
+  const box = document.getElementById('empresaCampanaProgreso');
+  const individual = document.getElementById('checkFechaIndividualEmpresa').checked;
+  const fechaProgramada = document.getElementById('inputFechaProgramadaEmpresa').value;
+
+  if (!template_nombre) {
+    alert('Escribí el nombre exacto de la plantilla');
+    return;
+  }
+  if (contacto_ids.length === 0) {
+    alert('No hay contactos seleccionados para esta empresa');
+    return;
+  }
+  const confirmacion = individual
+    ? `¿Programar "${template_nombre}" para cada uno de los ${contacto_ids.length} contactos, según su propia fecha de recordatorio?`
+    : fechaProgramada
+      ? `¿Programar "${template_nombre}" para ${contacto_ids.length} contactos el ${new Date(fechaProgramada).toLocaleString('es-CO')}?`
+      : `¿Enviar "${template_nombre}" a ${contacto_ids.length} contactos ahora mismo?`;
+  if (!confirm(confirmacion)) return;
+
+  const btn = document.getElementById('btnEnviarCampanaEmpresa');
+  btn.disabled = true;
+  btn.classList.add('is-loading');
+  box.classList.remove('hidden', 'error', 'ok');
+  box.textContent = individual ? 'Creando recordatorios…' : 'Iniciando envío…';
+
+  try {
+    const formData = new FormData();
+    formData.append('cliente_id', empresaDetalleId);
+    formData.append('template_nombre', template_nombre);
+    formData.append('idioma', idioma);
+    formData.append('contacto_ids', JSON.stringify(contacto_ids));
+    formData.append('parametros', JSON.stringify(empresaParametros));
+    if (individual) {
+      formData.append('individual', 'true');
+    } else if (fechaProgramada) {
+      formData.append('fecha_programada', fechaProgramada);
+    }
+    if (document.getElementById('checkRecurrenteMensualEmpresa').checked) {
+      formData.append('recurrente_mensual', 'true');
+    }
+    const archivoImagen = document.getElementById('templateImagenEmpresa').files[0];
+    if (archivoImagen) formData.append('imagen', archivoImagen);
+
+    const res = await fetch('/api/campanas', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Error al crear la campaña');
+
+    btn.classList.remove('is-loading');
+
+    if (individual) {
+      box.classList.add(data.omitidos.length > 0 ? 'error' : 'ok');
+      let texto = `Se programaron ${data.creadas} recordatorios individuales de ${data.total} contactos.`;
+      if (data.omitidos.length > 0) {
+        texto += `\nOmitidos (sin fecha de recordatorio cargada): ${data.omitidos.join(', ')}`;
+      }
+      box.textContent = texto;
+      btn.disabled = false;
+    } else if (data.programada) {
+      box.classList.add('ok');
+      box.textContent = `Campaña programada para ${new Date(fechaProgramada).toLocaleString('es-CO')}. Se mandará sola llegado el momento.`;
+      btn.disabled = false;
+    } else {
+      pollProgresoCampana(data.campana_id, data.total, box, btn, paramsEmpresaDetalle());
+    }
+  } catch (err) {
+    box.classList.add('error');
+    box.textContent = err.message;
+    btn.disabled = false;
+    btn.classList.remove('is-loading');
+  }
+});
+
 // ==================== CAMPAÑA (parámetros dinámicos) ====================
 
-function renderParametros() {
-  const cont = document.getElementById('parametrosLista');
+/**
+ * Dibuja el builder de parámetros ({{1}}, {{2}}, …) dentro de `cont`, a
+ * partir del array `lista` — la usan tanto la pestaña general Nueva
+ * campaña como la campaña de una empresa, cada una con su propio
+ * contenedor y su propio array, para no duplicar este bloque de UI.
+ */
+function renderParametrosEn(cont, lista, onChange) {
   cont.innerHTML = '';
-  parametros.forEach((p, idx) => {
+  lista.forEach((p, idx) => {
     const row = document.createElement('div');
     row.className = 'param-row';
     row.innerHTML = `
@@ -643,28 +945,32 @@ function renderParametros() {
   cont.querySelectorAll('.param-tipo').forEach((sel) => {
     sel.addEventListener('change', (e) => {
       const idx = Number(e.target.dataset.idx);
-      parametros[idx].tipo = e.target.value;
-      renderParametros();
+      lista[idx].tipo = e.target.value;
+      onChange();
     });
   });
   cont.querySelectorAll('.param-valor').forEach((inp) => {
     inp.addEventListener('input', (e) => {
       const idx = Number(e.target.dataset.idx);
-      parametros[idx].valor = e.target.value;
+      lista[idx].valor = e.target.value;
     });
   });
   cont.querySelectorAll('.param-clave').forEach((inp) => {
     inp.addEventListener('input', (e) => {
       const idx = Number(e.target.dataset.idx);
-      parametros[idx].clave = e.target.value;
+      lista[idx].clave = e.target.value;
     });
   });
   cont.querySelectorAll('[data-remove]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      parametros.splice(Number(btn.dataset.remove), 1);
-      renderParametros();
+      lista.splice(Number(btn.dataset.remove), 1);
+      onChange();
     });
   });
+}
+
+function renderParametros() {
+  renderParametrosEn(document.getElementById('parametrosLista'), parametros, renderParametros);
 }
 
 document.getElementById('btnAgregarParametro').addEventListener('click', () => {
@@ -707,7 +1013,6 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
 
   try {
     const formData = new FormData();
-    if (empresaActivaId) formData.append('cliente_id', empresaActivaId);
     formData.append('template_nombre', template_nombre);
     formData.append('idioma', idioma);
     formData.append('contacto_ids', JSON.stringify(contacto_ids));
@@ -716,6 +1021,9 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
       formData.append('individual', 'true');
     } else if (fechaProgramada) {
       formData.append('fecha_programada', fechaProgramada);
+    }
+    if (document.getElementById('checkRecurrenteMensual').checked) {
+      formData.append('recurrente_mensual', 'true');
     }
     const archivoImagen = document.getElementById('templateImagen').files[0];
     if (archivoImagen) formData.append('imagen', archivoImagen);
@@ -749,9 +1057,10 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
   }
 });
 
-async function pollProgresoCampana(campanaId, total, box, btn) {
+/** `paramsCliente`: query string opcional (ej: `?cliente_id=5`) cuando se está polleando la campaña de una empresa en vez de la cuenta propia. */
+async function pollProgresoCampana(campanaId, total, box, btn, paramsCliente = '') {
   const interval = setInterval(async () => {
-    const res = await fetch(`/api/campanas/${campanaId}${paramsEmpresaActiva()}`);
+    const res = await fetch(`/api/campanas/${campanaId}${paramsCliente}`);
     const data = await res.json();
     const c = data.campana;
     const procesados = c.enviados + c.fallidos;
@@ -856,20 +1165,26 @@ function renderCampanas() {
       <td>${escapeHtml(c.template_nombre)}</td>
       <td>${formatearFechaHora(c.creado_en)}</td>
       <td>
-        <span class="estado-pill estado-${c.estado}">${c.estado}</span>
+        <span class="estado-pill estado-${c.estado}">${c.estado}${c.recurrente_mensual ? ' 🔁' : ''}</span>
         ${c.estado === 'programada' && c.fecha_programada ? `<div class="muted" style="margin-top:4px;font-size:11px;">Para: ${formatearFechaHora(c.fecha_programada)}</div>` : ''}
       </td>
       <td>${c.enviados}</td>
       <td>${c.entregados}</td>
       <td>${c.leidos}</td>
       <td>${c.fallidos}</td>
-      <td><button class="btn btn-sm btn-outline" data-ver="${c.id}">${ICONO_VER} Ver detalle</button></td>
+      <td>
+        <button class="btn btn-sm btn-outline" data-ver="${c.id}">${ICONO_VER} Ver detalle</button>
+        ${c.estado === 'programada' ? `<button class="btn btn-sm btn-danger" data-cancelar="${c.id}">Cancelar</button>` : ''}
+      </td>
     `;
     tbody.appendChild(tr);
   });
 
   tbody.querySelectorAll('[data-ver]').forEach((btn) => {
     btn.addEventListener('click', () => verDetalleCampana(Number(btn.dataset.ver)));
+  });
+  tbody.querySelectorAll('[data-cancelar]').forEach((btn) => {
+    btn.addEventListener('click', () => cancelarCampana(Number(btn.dataset.cancelar)));
   });
   tbody.querySelectorAll('[data-campana]').forEach((cb) => {
     cb.addEventListener('change', (e) => {
@@ -922,6 +1237,22 @@ async function verDetalleCampana(id) {
     `;
     tbody.appendChild(tr);
   });
+}
+
+/** Cancela una campaña todavía no disparada (solo tiene sentido en estado 'programada') — si era mensual, corta la cadena. */
+async function cancelarCampana(id) {
+  if (!confirm('¿Cancelar esta campaña programada? No se va a mandar (ni a repetirse el próximo mes, si era mensual).')) return;
+  const res = await fetch(`/api/campanas/${id}/cancelar`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cliente_id: esAdminFacturacion && facturacionConfig ? facturacionConfig.cliente_id : undefined }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    alert(data.error || 'No se pudo cancelar la campaña');
+    return;
+  }
+  cargarCampanas();
 }
 
 // ==================== FACTURACIÓN ====================

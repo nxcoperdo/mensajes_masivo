@@ -626,6 +626,9 @@ function esFechaFutura(fechaSql) {
  *     contactos, crea UNA CAMPAÑA POR CONTACTO usando el
  *     `fecha_recordatorio` propio de cada uno (contactos sin esa fecha
  *     quedan afuera, reportados en `omitidos`).
+ *   recurrente_mensual: 'true' (opcional) — al completarse el envío, se
+ *     clona la campaña para el mismo día del mes siguiente (ver
+ *     campanas.js). Sirve tanto en modo común como individual.
  *   imagen: archivo (opcional) — solo si la plantilla tiene un
  *     encabezado de tipo imagen o video. Se sube una vez a Meta y se
  *     reusa el media_id para todos los envíos. Si es un video se
@@ -639,7 +642,8 @@ app.post('/api/campanas', (req, res) => {
     const { cliente, error, status } = resolverClienteObjetivo(req, req.body?.cliente_id);
     if (error) return res.status(status).json({ error });
 
-    const { template_nombre, idioma, fecha_programada, individual } = req.body || {};
+    const { template_nombre, idioma, fecha_programada, individual, recurrente_mensual } = req.body || {};
+    const esRecurrenteMensual = recurrente_mensual === 'true' || recurrente_mensual === true ? 1 : 0;
     let contacto_ids, parametros;
     try {
       contacto_ids = JSON.parse(req.body?.contacto_ids || '[]');
@@ -717,8 +721,8 @@ app.post('/api/campanas', (req, res) => {
         const futura = esFechaFutura(fechaProgramada);
         const result = db
           .prepare(
-            `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id, fecha_programada, contacto_ids_json)
-             VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`
+            `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id, fecha_programada, contacto_ids_json, recurrente_mensual)
+             VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`
           )
           .run(
             templateNombreLimpio,
@@ -729,7 +733,8 @@ app.post('/api/campanas', (req, res) => {
             futura ? 'programada' : 'procesando',
             cliente.id,
             fechaProgramada,
-            JSON.stringify([contacto.id])
+            JSON.stringify([contacto.id]),
+            esRecurrenteMensual
           );
         creadas.push(result.lastInsertRowid);
         if (!futura) {
@@ -756,8 +761,8 @@ app.post('/api/campanas', (req, res) => {
 
     const result = db
       .prepare(
-        `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id, fecha_programada, contacto_ids_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id, fecha_programada, contacto_ids_json, recurrente_mensual)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         templateNombreLimpio,
@@ -769,7 +774,8 @@ app.post('/api/campanas', (req, res) => {
         futuraComun ? 'programada' : 'procesando',
         cliente.id,
         futuraComun ? fechaProgramadaComun : null,
-        JSON.stringify(contactos.map((c) => c.id))
+        JSON.stringify(contactos.map((c) => c.id)),
+        esRecurrenteMensual
       );
 
     const campanaId = result.lastInsertRowid;
@@ -791,6 +797,26 @@ app.post('/api/campanas', (req, res) => {
 
     res.status(202).json({ campana_id: campanaId, total: contactos.length, programada: futuraComun });
   });
+});
+
+/**
+ * Cancela una campaña todavía no disparada. Solo tiene sentido sobre
+ * `estado = 'programada'` — una vez en camino o completada no hay nada que
+ * cancelar. El scheduler (scheduler.js) solo mira campañas 'programada', así
+ * que una 'cancelada' ni se dispara ni, si era mensual, vuelve a clonarse.
+ */
+app.post('/api/campanas/:id/cancelar', (req, res) => {
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.body?.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  const campana = db.prepare('SELECT * FROM campanas WHERE id = ? AND cliente_id = ?').get(req.params.id, cliente.id);
+  if (!campana) return res.status(404).json({ error: 'Campaña no encontrada' });
+  if (campana.estado !== 'programada') {
+    return res.status(400).json({ error: 'Solo se puede cancelar una campaña que todavía no se disparó' });
+  }
+
+  db.prepare(`UPDATE campanas SET estado = 'cancelada' WHERE id = ?`).run(campana.id);
+  res.json({ ok: true });
 });
 
 // ==================== FACTURACIÓN ====================
@@ -829,19 +855,21 @@ function resolverClienteObjetivo(req, idPedido) {
 
 // ==================== ADMIN: GESTIÓN DE EMPRESAS ====================
 //
-// Panel para que el equipo admin (Code Repair Tech) suba contactos y cree
-// campañas EN NOMBRE de sus empresas cliente (ej: una odontología), sin que
-// esa empresa necesite loguearse. Reusa el mismo cruce de aislamiento que
-// ya tenía facturación (`resolverClienteObjetivo` de arriba), ahora también
-// en los endpoints de contactos y campañas.
+// Una "empresa" (ej: una odontología) es un espacio organizativo dentro del
+// panel del ÚNICO usuario real del aplicativo (el admin) — no tiene login
+// propio ni conecta su propio WhatsApp. El admin sube sus contactos, elige
+// con cuál de SUS números ya conectados (pestaña Webhook) manda, y arma sus
+// campañas, todo desde adentro de la empresa (ver resolverClienteObjetivo,
+// ya extendido a contactos/campañas para aceptar `cliente_id` de una
+// empresa en vez de la cuenta logueada).
 
 function serializarEmpresa(cliente) {
   return {
     id: cliente.id,
     nombre_negocio: cliente.nombre_negocio,
-    email: cliente.email,
     estado: cliente.estado,
     whatsapp_conectado: Boolean(cliente.phone_number_id && cliente.access_token),
+    phone_number_id: cliente.phone_number_id,
   };
 }
 
@@ -851,45 +879,73 @@ app.get('/api/admin/empresas', (req, res) => {
     return res.status(403).json({ error: 'No tenés permiso para ver esta lista' });
   }
   const empresas = db
-    .prepare('SELECT * FROM clientes ORDER BY (id = ?) DESC, nombre_negocio COLLATE NOCASE ASC, email ASC')
-    .all(propio.id);
+    .prepare('SELECT * FROM clientes WHERE es_empresa_gestionada = 1 ORDER BY nombre_negocio COLLATE NOCASE ASC')
+    .all();
   res.json({ empresas: empresas.map(serializarEmpresa) });
 });
 
-/** Crea una empresa cliente nueva sin tocar la sesión del admin logueado. */
+/**
+ * Crea una empresa nueva. Solo pide el nombre del negocio — no tiene login
+ * propio, así que se le genera un email placeholder único y una contraseña
+ * al azar que nunca se devuelven ni se muestran (existen solo porque
+ * `clientes.email`/`password_hash` son NOT NULL, no para que nadie inicie
+ * sesión con ellas).
+ */
 app.post('/api/admin/empresas', (req, res) => {
   const propio = clienteActual(req);
   if (!propio.es_admin) {
     return res.status(403).json({ error: 'No tenés permiso para crear empresas' });
   }
 
-  const { email, password, nombre_negocio } = req.body || {};
-  if (!email || !String(email).trim()) {
-    return res.status(400).json({ error: 'Falta el email' });
-  }
-  if (!password || String(password).length < 8) {
-    return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
+  const { nombre_negocio } = req.body || {};
+  if (!nombre_negocio || !String(nombre_negocio).trim()) {
+    return res.status(400).json({ error: 'Falta el nombre de la empresa' });
   }
 
-  const emailNormalizado = String(email).trim().toLowerCase();
-  const { hash, salt } = hashPassword(password);
+  const emailPlaceholder = `empresa-${crypto.randomBytes(8).toString('hex')}@gestionada.local`;
+  const { hash, salt } = hashPassword(crypto.randomBytes(24).toString('base64url'));
 
-  try {
-    const result = db
-      .prepare(
-        `INSERT INTO clientes (email, password_hash, password_salt, nombre_negocio, estado)
-         VALUES (?, ?, ?, ?, 'pendiente_whatsapp')`
-      )
-      .run(emailNormalizado, hash, salt, nombre_negocio ? String(nombre_negocio).trim() : null);
+  const result = db
+    .prepare(
+      `INSERT INTO clientes (email, password_hash, password_salt, nombre_negocio, estado, es_empresa_gestionada)
+       VALUES (?, ?, ?, ?, 'pendiente_whatsapp', 1)`
+    )
+    .run(emailPlaceholder, hash, salt, String(nombre_negocio).trim());
 
-    const creado = db.prepare('SELECT * FROM clientes WHERE id = ?').get(result.lastInsertRowid);
-    res.status(201).json({ empresa: serializarEmpresa(creado) });
-  } catch (err) {
-    if (String(err.message).includes('UNIQUE')) {
-      return res.status(409).json({ error: 'Ya existe una empresa con ese email' });
-    }
-    res.status(500).json({ error: err.message });
+  const creado = db.prepare('SELECT * FROM clientes WHERE id = ?').get(result.lastInsertRowid);
+  res.status(201).json({ empresa: serializarEmpresa(creado) });
+});
+
+/**
+ * Asigna a una empresa uno de los números que el ADMIN ya conectó (los que
+ * aparecen en la pestaña Webhook, tabla `whatsapp_numeros`). Copia
+ * waba_id/phone_number_id/access_token a la fila de la empresa — desde ahí
+ * `isWhatsAppConfigured`/`sendTemplate` funcionan igual que si la empresa
+ * hubiera conectado su propio WhatsApp.
+ */
+app.patch('/api/admin/empresas/:id/numero', (req, res) => {
+  const propio = clienteActual(req);
+  if (!propio.es_admin) {
+    return res.status(403).json({ error: 'No tenés permiso para asignar números' });
   }
+
+  const empresa = db
+    .prepare('SELECT * FROM clientes WHERE id = ? AND es_empresa_gestionada = 1')
+    .get(req.params.id);
+  if (!empresa) return res.status(404).json({ error: 'Empresa no encontrada' });
+
+  const { whatsapp_numero_id } = req.body || {};
+  const numero = db
+    .prepare('SELECT * FROM whatsapp_numeros WHERE id = ? AND cliente_id = ?')
+    .get(whatsapp_numero_id, propio.id);
+  if (!numero) return res.status(404).json({ error: 'Ese número no está entre los tuyos conectados' });
+
+  db.prepare(
+    `UPDATE clientes SET waba_id = ?, phone_number_id = ?, access_token = ?, estado = 'conectado' WHERE id = ?`
+  ).run(numero.waba_id, numero.phone_number_id, numero.access_token, empresa.id);
+
+  const actualizada = db.prepare('SELECT * FROM clientes WHERE id = ?').get(empresa.id);
+  res.json({ empresa: serializarEmpresa(actualizada) });
 });
 
 /** Datos de facturación (sin credenciales) que se mandan al frontend. */
