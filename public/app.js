@@ -1384,6 +1384,18 @@ async function abrirHistorial() {
   cargarFacturas();
 }
 
+/**
+ * Mientras haya alguna campaña en 'procesando' (una programada que ya
+ * arrancó a mandar sola, o un envío en curso desde otra pestaña/sesión),
+ * se sigue refrescando la lista sola cada 2s — mismo criterio que
+ * `pollProgresoCampana` para un envío inmediato, pero a nivel de toda la
+ * tabla porque acá no hay un único `campanaId` que observar. Se corta
+ * sola en cuanto no queda nada en curso, y el `timeout` guardado evita
+ * que se dupare la cadena si `cargarCampanas()` se llama desde otro lado
+ * (cambio de cliente, etc.) mientras ya hay una corriendo.
+ */
+let refrescoCampanasProgramado = null;
+
 async function cargarCampanas() {
   const res = await fetch(`/api/campanas${paramsClienteFacturacion()}`);
   const data = await res.json();
@@ -1397,6 +1409,16 @@ async function cargarCampanas() {
   }
 
   renderCampanas();
+
+  const hayEnCurso = campanas.some((c) => c.estado === 'procesando');
+  if (hayEnCurso && !refrescoCampanasProgramado) {
+    refrescoCampanasProgramado = setTimeout(() => {
+      refrescoCampanasProgramado = null;
+      if (document.getElementById('tab-historial').classList.contains('active')) {
+        cargarCampanas();
+      }
+    }, 2000);
+  }
 }
 
 function renderCampanas() {
