@@ -360,53 +360,132 @@ const ICONO_ELIMINAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColo
 const ICONO_VER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z" /><circle cx="12" cy="12" r="3" /></svg>';
 const ICONO_CONTACTOS_VACIO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /></svg>';
 
-function renderContactos() {
-  const tbody = document.getElementById('tablaContactos');
+/** Convierte lo que haya guardado (formato SQL 'YYYY-MM-DD HH:MM:SS' o ya con 'T') al formato que espera un input datetime-local. */
+function aInputDatetimeLocal(valor) {
+  if (!valor) return '';
+  return String(valor).replace(' ', 'T').slice(0, 16);
+}
+
+/**
+ * Dibuja la tabla de contactos (checkbox, teléfono, nombre, fecha de envío
+ * individual, acciones) dentro de `tbody` — la usan tanto la pestaña
+ * general Contactos como los contactos de una empresa, cada una con su
+ * propio array/Set/callbacks, para no duplicar este bloque de UI. Un
+ * contacto en edición (`editandoId`) muestra inputs en vez de texto.
+ */
+function renderTablaContactos({ tbody, lista, seleccionados, editandoId, totalEl, onCambioSeleccion, onEliminar, onEditar, onCancelarEdicion, onGuardarEdicion }) {
   tbody.innerHTML = '';
 
-  if (contactos.length === 0) {
+  if (lista.length === 0) {
     tbody.innerHTML = `
-      <tr><td colspan="4">
+      <tr><td colspan="5">
         <div class="empty-state">
           ${ICONO_CONTACTOS_VACIO}
           <div>Todavía no cargaste contactos. Importá un CSV/Excel o agregá uno manual.</div>
         </div>
       </td></tr>
     `;
-    document.getElementById('totalContactos').textContent = 0;
-    actualizarContadorSeleccion();
+    if (totalEl) totalEl.textContent = 0;
+    onCambioSeleccion();
     return;
   }
 
-  contactos.forEach((c) => {
+  lista.forEach((c) => {
     const tr = document.createElement('tr');
     const checked = seleccionados.has(c.id) ? 'checked' : '';
-    tr.innerHTML = `
-      <td><input type="checkbox" data-id="${c.id}" ${checked} /></td>
-      <td>${c.telefono}</td>
-      <td>${c.nombre || '<span class="muted">(sin nombre)</span>'}</td>
-      <td><button class="btn btn-sm btn-outline" data-del="${c.id}">${ICONO_ELIMINAR} Eliminar</button></td>
-    `;
+    if (editandoId === c.id) {
+      tr.innerHTML = `
+        <td><input type="checkbox" data-id="${c.id}" ${checked} /></td>
+        <td>${c.telefono}</td>
+        <td><input type="text" class="edit-nombre" value="${c.nombre ? escapeHtml(c.nombre) : ''}" placeholder="Nombre" /></td>
+        <td><input type="datetime-local" class="edit-fecha" value="${aInputDatetimeLocal(c.fecha_recordatorio)}" /></td>
+        <td>
+          <button type="button" class="btn btn-sm btn-primary" data-guardar="${c.id}">Guardar</button>
+          <button type="button" class="btn btn-sm btn-outline" data-cancelar="${c.id}">Cancelar</button>
+        </td>
+      `;
+    } else {
+      tr.innerHTML = `
+        <td><input type="checkbox" data-id="${c.id}" ${checked} /></td>
+        <td>${c.telefono}</td>
+        <td>${c.nombre ? escapeHtml(c.nombre) : '<span class="muted">(sin nombre)</span>'}</td>
+        <td>${c.fecha_recordatorio ? formatearFechaHora(c.fecha_recordatorio) : '<span class="muted">— (usa fecha masiva si aplica)</span>'}</td>
+        <td>
+          <button type="button" class="btn btn-sm btn-outline" data-editar="${c.id}">Editar</button>
+          <button type="button" class="btn btn-sm btn-outline" data-del="${c.id}">${ICONO_ELIMINAR} Eliminar</button>
+        </td>
+      `;
+    }
     tbody.appendChild(tr);
   });
-  document.getElementById('totalContactos').textContent = contactos.length;
-  actualizarContadorSeleccion();
+  if (totalEl) totalEl.textContent = lista.length;
+  onCambioSeleccion();
 
   tbody.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
     cb.addEventListener('change', (e) => {
       const id = Number(e.target.dataset.id);
       if (e.target.checked) seleccionados.add(id);
       else seleccionados.delete(id);
-      actualizarContadorSeleccion();
+      onCambioSeleccion();
     });
   });
   tbody.querySelectorAll('[data-del]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const id = Number(btn.dataset.del);
+    btn.addEventListener('click', () => onEliminar(Number(btn.dataset.del)));
+  });
+  tbody.querySelectorAll('[data-editar]').forEach((btn) => {
+    btn.addEventListener('click', () => onEditar(Number(btn.dataset.editar)));
+  });
+  tbody.querySelectorAll('[data-cancelar]').forEach((btn) => {
+    btn.addEventListener('click', () => onCancelarEdicion());
+  });
+  tbody.querySelectorAll('[data-guardar]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tr = btn.closest('tr');
+      onGuardarEdicion(Number(btn.dataset.guardar), {
+        nombre: tr.querySelector('.edit-nombre').value.trim(),
+        fecha_recordatorio: tr.querySelector('.edit-fecha').value || null,
+      });
+    });
+  });
+}
+
+let editandoContactoId = null;
+
+function renderContactos() {
+  renderTablaContactos({
+    tbody: document.getElementById('tablaContactos'),
+    lista: contactos,
+    seleccionados,
+    editandoId: editandoContactoId,
+    totalEl: document.getElementById('totalContactos'),
+    onCambioSeleccion: actualizarContadorSeleccion,
+    onEliminar: async (id) => {
       await fetch(`/api/contactos/${id}`, { method: 'DELETE' });
       seleccionados.delete(id);
       cargarContactos();
-    });
+    },
+    onEditar: (id) => {
+      editandoContactoId = id;
+      renderContactos();
+    },
+    onCancelarEdicion: () => {
+      editandoContactoId = null;
+      renderContactos();
+    },
+    onGuardarEdicion: async (id, cambios) => {
+      const res = await fetch(`/api/contactos/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cambios),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.error || 'No se pudo guardar el contacto');
+        return;
+      }
+      editandoContactoId = null;
+      cargarContactos();
+    },
   });
 }
 
@@ -473,10 +552,11 @@ document.getElementById('formAgregarContacto').addEventListener('submit', async 
   const form = e.target;
   const telefono = form.telefono.value.trim();
   const nombre = form.nombre.value.trim();
+  const fecha_recordatorio = form.fecha_recordatorio.value || null;
   const res = await fetch('/api/contactos', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ telefono, nombre }),
+    body: JSON.stringify({ telefono, nombre, fecha_recordatorio }),
   });
   if (res.ok) {
     form.reset();
@@ -613,6 +693,7 @@ async function abrirEmpresa(id) {
 
   empresaSeleccionados.clear();
   empresaLoteOffset = 0;
+  empresaEditandoContactoId = null;
   empresaParametros = [];
   renderParametrosEmpresa();
   document.getElementById('empresaCampanaProgreso').classList.add('hidden');
@@ -674,53 +755,43 @@ async function cargarContactosEmpresa() {
   renderContactosEmpresa();
 }
 
+let empresaEditandoContactoId = null;
+
 function renderContactosEmpresa() {
-  const tbody = document.getElementById('tablaContactosEmpresa');
-  tbody.innerHTML = '';
-
-  if (empresaContactos.length === 0) {
-    tbody.innerHTML = `
-      <tr><td colspan="4">
-        <div class="empty-state">
-          ${ICONO_CONTACTOS_VACIO}
-          <div>Todavía no cargaste contactos para esta empresa.</div>
-        </div>
-      </td></tr>
-    `;
-    document.getElementById('totalContactosEmpresa').textContent = 0;
-    actualizarContadorSeleccionEmpresa();
-    return;
-  }
-
-  empresaContactos.forEach((c) => {
-    const tr = document.createElement('tr');
-    const checked = empresaSeleccionados.has(c.id) ? 'checked' : '';
-    tr.innerHTML = `
-      <td><input type="checkbox" data-id="${c.id}" ${checked} /></td>
-      <td>${c.telefono}</td>
-      <td>${c.nombre || '<span class="muted">(sin nombre)</span>'}</td>
-      <td><button class="btn btn-sm btn-outline" data-del="${c.id}">${ICONO_ELIMINAR} Eliminar</button></td>
-    `;
-    tbody.appendChild(tr);
-  });
-  document.getElementById('totalContactosEmpresa').textContent = empresaContactos.length;
-  actualizarContadorSeleccionEmpresa();
-
-  tbody.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-    cb.addEventListener('change', (e) => {
-      const id = Number(e.target.dataset.id);
-      if (e.target.checked) empresaSeleccionados.add(id);
-      else empresaSeleccionados.delete(id);
-      actualizarContadorSeleccionEmpresa();
-    });
-  });
-  tbody.querySelectorAll('[data-del]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const id = Number(btn.dataset.del);
+  renderTablaContactos({
+    tbody: document.getElementById('tablaContactosEmpresa'),
+    lista: empresaContactos,
+    seleccionados: empresaSeleccionados,
+    editandoId: empresaEditandoContactoId,
+    totalEl: document.getElementById('totalContactosEmpresa'),
+    onCambioSeleccion: actualizarContadorSeleccionEmpresa,
+    onEliminar: async (id) => {
       await fetch(`/api/contactos/${id}${paramsEmpresaDetalle()}`, { method: 'DELETE' });
       empresaSeleccionados.delete(id);
       cargarContactosEmpresa();
-    });
+    },
+    onEditar: (id) => {
+      empresaEditandoContactoId = id;
+      renderContactosEmpresa();
+    },
+    onCancelarEdicion: () => {
+      empresaEditandoContactoId = null;
+      renderContactosEmpresa();
+    },
+    onGuardarEdicion: async (id, cambios) => {
+      const res = await fetch(`/api/contactos/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...cambios, cliente_id: empresaDetalleId }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.error || 'No se pudo guardar el contacto');
+        return;
+      }
+      empresaEditandoContactoId = null;
+      cargarContactosEmpresa();
+    },
   });
 }
 
@@ -768,10 +839,11 @@ document.getElementById('formAgregarContactoEmpresa').addEventListener('submit',
   const form = e.target;
   const telefono = form.telefono.value.trim();
   const nombre = form.nombre.value.trim();
+  const fecha_recordatorio = form.fecha_recordatorio.value || null;
   const res = await fetch('/api/contactos', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ telefono, nombre, cliente_id: empresaDetalleId }),
+    body: JSON.stringify({ telefono, nombre, fecha_recordatorio, cliente_id: empresaDetalleId }),
   });
   if (res.ok) {
     form.reset();

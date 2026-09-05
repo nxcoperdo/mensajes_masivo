@@ -177,6 +177,10 @@
             <div class="field">
               <input type="text" name="nombre" placeholder="Nombre (opcional)" autocomplete="off" />
             </div>
+            <div class="field">
+              <label for="inputFechaRecordatorioManualEmpresa" class="sr-only">Fecha de envío individual</label>
+              <input type="datetime-local" name="fecha_recordatorio" id="inputFechaRecordatorioManualEmpresa" title="Fecha de envío individual (opcional)" />
+            </div>
             <button type="submit" class="btn btn-outline">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
               Agregar
@@ -199,6 +203,7 @@
             <button type="button" id="btnSeleccionarLoteEmpresa" class="btn btn-sm btn-outline">Seleccionar siguiente lote</button>
             <button type="button" id="btnReiniciarLoteEmpresa" class="btn btn-sm btn-outline">Reiniciar lote</button>
           </div>
+          <p class="muted" style="margin-top: 4px;">"Fecha de envío" es la fecha individual de ESE contacto (para el modo "Fecha individual por contacto" de la campaña) — un contacto sin fecha propia igual puede recibir un envío masivo con fecha común.</p>
           <div class="table-wrap">
             <table class="tabla">
               <thead>
@@ -206,6 +211,7 @@
                   <th></th>
                   <th>Teléfono</th>
                   <th>Nombre</th>
+                  <th>Fecha de envío</th>
                   <th></th>
                 </tr>
               </thead>
@@ -291,6 +297,10 @@
             <label for="inputNombreManual" class="sr-only">Nombre</label>
             <input type="text" name="nombre" id="inputNombreManual" placeholder="Nombre (opcional)" autocomplete="off" />
           </div>
+          <div class="field">
+            <label for="inputFechaRecordatorioManual" class="sr-only">Fecha de envío individual</label>
+            <input type="datetime-local" name="fecha_recordatorio" id="inputFechaRecordatorioManual" title="Fecha de envío individual (opcional)" />
+          </div>
           <button type="submit" class="btn btn-outline">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
             Agregar
@@ -318,6 +328,7 @@
           Mandar en lotes de a poco (ej: 100 a la vez) evita que una campaña larga quede a mitad de camino
           si el servidor se reinicia, y ayuda a no pasarte del límite diario de conversaciones que te da Meta.
         </p>
+        <p class="muted" style="margin-top: 4px;">"Fecha de envío" es la fecha individual de ESE contacto (para el modo "Fecha individual por contacto" de la campaña) — un contacto sin fecha propia igual puede recibir un envío masivo con fecha común.</p>
         <div class="table-wrap">
           <table class="tabla">
             <thead>
@@ -325,6 +336,7 @@
                 <th></th>
                 <th>Teléfono</th>
                 <th>Nombre</th>
+                <th>Fecha de envío</th>
                 <th></th>
               </tr>
             </thead>

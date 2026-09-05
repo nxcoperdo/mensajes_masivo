@@ -406,10 +406,14 @@ app.post('/api/contactos', (req, res) => {
   if (!normalizado) {
     return res.status(400).json({ error: 'Teléfono inválido' });
   }
+  const fechaRecordatorioNormalizada = fecha_recordatorio ? normalizarFechaProgramada(fecha_recordatorio) : null;
+  if (fecha_recordatorio && !fechaRecordatorioNormalizada) {
+    return res.status(400).json({ error: 'Fecha de envío inválida' });
+  }
   try {
     const result = db
       .prepare('INSERT INTO contactos (telefono, nombre, cliente_id, fecha_recordatorio) VALUES (?, ?, ?, ?)')
-      .run(normalizado, nombre || null, cliente.id, fecha_recordatorio || null);
+      .run(normalizado, nombre || null, cliente.id, fechaRecordatorioNormalizada);
     res.status(201).json({ id: result.lastInsertRowid });
   } catch (err) {
     if (String(err.message).includes('UNIQUE')) {
@@ -433,6 +437,31 @@ app.delete('/api/contactos/:id', (req, res) => {
 
   db.prepare('DELETE FROM contactos WHERE id = ? AND cliente_id = ?').run(req.params.id, cliente.id);
   res.json({ ok: true });
+});
+
+/**
+ * Edita un contacto ya cargado — sobre todo pensado para poner o corregir
+ * a mano su `fecha_recordatorio` (el envío individual, ver POST
+ * /api/campanas con `individual=true`) cuando no vino de una columna del
+ * CSV, o cuando hay que reprogramarlo sin tener que reimportar todo.
+ */
+app.patch('/api/contactos/:id', (req, res) => {
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.body?.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  const contacto = db.prepare('SELECT * FROM contactos WHERE id = ? AND cliente_id = ?').get(req.params.id, cliente.id);
+  if (!contacto) return res.status(404).json({ error: 'Contacto no encontrado' });
+
+  const { nombre, fecha_recordatorio } = req.body || {};
+  const fechaNormalizada = fecha_recordatorio ? normalizarFechaProgramada(fecha_recordatorio) : null;
+  if (fecha_recordatorio && !fechaNormalizada) {
+    return res.status(400).json({ error: 'Fecha de envío inválida' });
+  }
+
+  db.prepare('UPDATE contactos SET nombre = ?, fecha_recordatorio = ? WHERE id = ?')
+    .run(nombre || null, fechaNormalizada, contacto.id);
+
+  res.json({ contacto: db.prepare('SELECT * FROM contactos WHERE id = ?').get(contacto.id) });
 });
 
 // Columnas del CSV/Excel con un significado propio — todo lo demás que
@@ -501,6 +530,7 @@ app.post('/api/contactos/importar', (req, res) => {
         const telefonoRaw = row.telefono || row.phone || row.numero || row.celular || '';
         const nombreRaw = row.nombre || row.name || '';
         const fechaRecordatorioRaw = row.fecha_envio || row.fecha_recordatorio || '';
+        const fechaRecordatorioNormalizada = fechaRecordatorioRaw ? normalizarFechaProgramada(fechaRecordatorioRaw) : null;
         const normalizado = normalizePhone(telefonoRaw);
         if (!normalizado) {
           if (telefonoRaw) invalidos.push(telefonoRaw);
@@ -512,7 +542,7 @@ app.post('/api/contactos/importar', (req, res) => {
           nombreRaw || null,
           cliente.id,
           Object.keys(variables).length > 0 ? JSON.stringify(variables) : null,
-          fechaRecordatorioRaw || null
+          fechaRecordatorioNormalizada
         );
         importados++;
       }
