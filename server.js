@@ -16,10 +16,12 @@ import { iniciarScheduler } from './scheduler.js';
 import { buscarNegocios } from './leads.js';
 import {
   calcularResumen,
+  calcularCotizacion,
   datosEmisor,
   generarFacturaPdf,
   generarReportePdf,
   generarHistorialDetalladoPdf,
+  generarCotizacionPdf,
   nombreArchivo,
 } from './facturacion.js';
 
@@ -522,6 +524,7 @@ app.post('/api/contactos/importar', (req, res) => {
 
     let importados = 0;
     const invalidos = [];
+    const telefonosImportados = [];
     // `node:sqlite` no trae un helper `.transaction()` como better-sqlite3
     // — envolvemos a mano con BEGIN/COMMIT (y ROLLBACK si algo explota).
     db.exec('BEGIN');
@@ -544,6 +547,7 @@ app.post('/api/contactos/importar', (req, res) => {
           Object.keys(variables).length > 0 ? JSON.stringify(variables) : null,
           fechaRecordatorioNormalizada
         );
+        telefonosImportados.push(normalizado);
         importados++;
       }
       db.exec('COMMIT');
@@ -552,8 +556,55 @@ app.post('/api/contactos/importar', (req, res) => {
       return res.status(500).json({ error: err.message });
     }
 
-    res.json({ importados, invalidos, total_filas: filas.length });
+    // Guarda este lote como una "lista" reutilizable — resuelve los ids
+    // reales (nuevos o ya existentes) por teléfono, en vez de confiar en
+    // `lastInsertRowid` (poco fiable cuando el UPSERT actualiza en vez de
+    // insertar).
+    let listaId = null;
+    let contactoIds = [];
+    if (telefonosImportados.length > 0) {
+      const marcadores = telefonosImportados.map(() => '?').join(',');
+      contactoIds = db
+        .prepare(`SELECT id FROM contactos WHERE cliente_id = ? AND telefono IN (${marcadores})`)
+        .all(cliente.id, ...telefonosImportados)
+        .map((c) => c.id);
+
+      const resultLista = db
+        .prepare('INSERT INTO listas_contactos (cliente_id, nombre, contacto_ids_json, total) VALUES (?, ?, ?, ?)')
+        .run(cliente.id, req.file.originalname, JSON.stringify(contactoIds), contactoIds.length);
+      listaId = resultLista.lastInsertRowid;
+    }
+
+    res.json({ importados, invalidos, total_filas: filas.length, contacto_ids: contactoIds, lista_id: listaId });
   });
+});
+
+// ==================== LISTAS DE CONTACTOS (importaciones guardadas) ====================
+
+app.get('/api/listas', (req, res) => {
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.query.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  const listas = db
+    .prepare('SELECT * FROM listas_contactos WHERE cliente_id = ? ORDER BY id DESC')
+    .all(cliente.id);
+  res.json({
+    listas: listas.map((l) => ({
+      id: l.id,
+      nombre: l.nombre,
+      total: l.total,
+      creado_en: l.creado_en,
+      contacto_ids: JSON.parse(l.contacto_ids_json || '[]'),
+    })),
+  });
+});
+
+app.delete('/api/listas/:id', (req, res) => {
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.query.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  db.prepare('DELETE FROM listas_contactos WHERE id = ? AND cliente_id = ?').run(req.params.id, cliente.id);
+  res.json({ ok: true });
 });
 
 // ==================== CAMPAÑAS ====================
@@ -1164,6 +1215,49 @@ app.get('/api/facturacion/historial.pdf', (req, res) => {
   } catch (err) {
     console.error('Error generando el historial detallado PDF:', err);
     res.status(500).json({ error: 'No se pudo generar el historial detallado PDF' });
+  }
+});
+
+/**
+ * Cotización: estimación de lo que costaría mandarle una campaña a un
+ * grupo de contactos, ANTES de mandarla — usa la misma tarifa/IVA que ya
+ * se configura en Historial → Tarifa, pero no toca `campanas`/`envios`
+ * (no hay nada enviado todavía). Complementa a `reporte.pdf`, que es el
+ * mismo cálculo pero sobre mensajes ya mandados.
+ */
+app.get('/api/facturacion/cotizacion.pdf', (req, res) => {
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.query.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  const ids = idsDesdeQuery(req.query.contacto_ids);
+  if (ids.length === 0) {
+    return res.status(400).json({ error: 'Elegí al menos un contacto' });
+  }
+
+  const marcadores = ids.map(() => '?').join(',');
+  const contactos = db
+    .prepare(`SELECT id, telefono, nombre FROM contactos WHERE id IN (${marcadores}) AND cliente_id = ?`)
+    .all(...ids, cliente.id);
+  if (contactos.length === 0) {
+    return res.status(400).json({ error: 'No se encontraron los contactos seleccionados' });
+  }
+
+  const cotizacion = calcularCotizacion({
+    totalContactos: contactos.length,
+    tarifa: Number(cliente.tarifa_por_mensaje) || 0,
+    ivaPorcentaje: Number(cliente.iva_porcentaje) || 0,
+    moneda: cliente.moneda || 'COP',
+  });
+
+  try {
+    const pdf = generarCotizacionPdf({ contactos, cotizacion, cliente });
+    const nombre = nombreArchivo(`cotizacion-${cliente.nombre_negocio || cliente.email}-${new Date().toISOString().slice(0, 10)}`);
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', `attachment; filename="${nombre}.pdf"`);
+    res.send(pdf);
+  } catch (err) {
+    console.error('Error generando la cotización PDF:', err);
+    res.status(500).json({ error: 'No se pudo generar la cotización PDF' });
   }
 });
 

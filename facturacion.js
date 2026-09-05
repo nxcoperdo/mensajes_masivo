@@ -226,6 +226,27 @@ function redondear(valor) {
   return Math.round((Number(valor) || 0) * 100) / 100;
 }
 
+/**
+ * Estimación de costo para mandarle una campaña a `totalContactos`, usando
+ * la misma tarifa/IVA que ya se configura por cliente (Historial →
+ * Tarifa). No depende de campañas/envíos reales — es una proyección de
+ * ANTES de mandar, no un reemplazo de `calcularResumen` (que factura lo
+ * que ya se envió de verdad).
+ */
+export function calcularCotizacion({ totalContactos, tarifa = 0, ivaPorcentaje = 0, moneda = 'COP' }) {
+  const subtotal = redondear(totalContactos * tarifa);
+  const ivaMonto = redondear(subtotal * (ivaPorcentaje / 100));
+  return {
+    total_contactos: totalContactos,
+    moneda,
+    tarifa,
+    iva_porcentaje: ivaPorcentaje,
+    subtotal,
+    iva_monto: ivaMonto,
+    total: redondear(subtotal + ivaMonto),
+  };
+}
+
 // ==================== PALETA Y BLOQUES DE PDF ====================
 //
 // Los colores replican los design tokens de public/style.css para que
@@ -1047,6 +1068,118 @@ export function generarHistorialDetalladoPdf({ campanas, envios, cliente, emisor
     alSaltarPagina: nuevaPaginaContinuacion,
     sinFilas: 'No hay envíos para las campañas seleccionadas.',
   });
+
+  pie(doc, doc.totalPaginas, piePagina);
+  return doc.buffer();
+}
+
+// ==================== PDF: COTIZACIÓN ====================
+
+/**
+ * Estimación de costo en PDF para un grupo de contactos, ANTES de
+ * mandarles una campaña — mismo cálculo que `calcularCotizacion`, con el
+ * detalle de a quiénes se les mandaría. No es un documento fiscal (no
+ * lleva numeración ni se guarda), es solo una proyección para decidir.
+ */
+export function generarCotizacionPdf({ contactos, cotizacion, cliente, emisor = datosEmisor(), generadoEn = new Date() }) {
+  const doc = crearDocumento();
+  const moneda = cotizacion.moneda || 'COP';
+  const piePagina = `${emisor.nombre}  ·  Cotización para ${cliente.nombre_negocio || cliente.email}  ·  ${fechaConHora(generadoEn)}`;
+
+  const nuevaPaginaContinuacion = () => {
+    pie(doc, doc.totalPaginas, piePagina);
+    doc.nuevaPagina();
+    const alto = cabecera(doc, { titulo: 'COTIZACIÓN', subtitulo: 'continuación' });
+    return alto + 24;
+  };
+
+  let y = cabecera(doc, {
+    titulo: 'COTIZACIÓN',
+    subtitulo: 'ESTIMACIÓN DE ENVÍO',
+    lineasDerecha: [
+      `Cliente: ${cliente.nombre_negocio || cliente.email}`,
+      `${formatearNumero(cotizacion.total_contactos)} contacto${cotizacion.total_contactos === 1 ? '' : 's'} seleccionado${cotizacion.total_contactos === 1 ? '' : 's'}`,
+      `Generado el ${fechaConHora(generadoEn)}`,
+    ],
+  });
+
+  y += 22;
+
+  rotulo(doc, 'Contactos incluidos', MARGEN, y);
+  y += 16;
+
+  const anchos = [ANCHO_UTIL - 220, 220];
+  const columnas = [
+    { titulo: 'Teléfono', clave: 'telefono', ancho: anchos[0] },
+    { titulo: 'Nombre', clave: 'nombre', ancho: anchos[1] },
+  ];
+  const filas = contactos.map((c) => ({ telefono: c.telefono, nombre: c.nombre || '—' }));
+
+  y = tabla(doc, {
+    x: MARGEN,
+    y,
+    columnas,
+    filas,
+    alSaltarPagina: nuevaPaginaContinuacion,
+    sinFilas: 'No hay contactos seleccionados.',
+  });
+
+  y += 18;
+
+  // ---- Totales (mismo bloque visual que la factura) ----
+  const anchoTotales = 250;
+  const xTotales = ANCHO_PAGINA - MARGEN - anchoTotales;
+
+  if (y + 130 > ALTO_PAGINA - 62) y = nuevaPaginaContinuacion();
+
+  const filasTotales = [
+    ['Contactos', formatearNumero(cotizacion.total_contactos)],
+    ['Valor por mensaje', formatearTarifa(cotizacion.tarifa, moneda)],
+    ['Subtotal', formatearMoneda(cotizacion.subtotal, moneda)],
+  ];
+  if (Number(cotizacion.iva_porcentaje) > 0) {
+    filasTotales.push([`IVA (${String(cotizacion.iva_porcentaje).replace('.', ',')}%)`, formatearMoneda(cotizacion.iva_monto, moneda)]);
+  }
+
+  let yTotal = y;
+  for (const [etiqueta, valor] of filasTotales) {
+    doc.texto(etiqueta, xTotales, yTotal + 4, { tamano: 9, color: COLOR.suave });
+    doc.texto(valor, xTotales, yTotal + 4, {
+      tamano: 9,
+      fuente: 'negrita',
+      color: COLOR.tinta,
+      alineacion: 'right',
+      ancho: anchoTotales,
+    });
+    yTotal += 18;
+    doc.linea(xTotales, yTotal, xTotales + anchoTotales, yTotal, { color: COLOR.borde, grosor: 0.5 });
+  }
+
+  yTotal += 6;
+  doc.rectangulo(xTotales, yTotal, anchoTotales, 40, { relleno: COLOR.negro, radio: 8 });
+  doc.rectangulo(xTotales, yTotal, 3.5, 40, { relleno: COLOR.azul, radio: 1.75 });
+  rotulo(doc, 'Total estimado', xTotales + 14, yTotal + 9, { color: COLOR.tenue });
+  doc.texto(formatearMoneda(cotizacion.total, moneda), xTotales + 14, yTotal + 21, {
+    fuente: 'negrita',
+    tamano: 15,
+    color: COLOR.blanco,
+    alineacion: 'right',
+    ancho: anchoTotales - 28,
+  });
+
+  // ---- Nota ----
+  const anchoNota = ANCHO_UTIL - anchoTotales - 20;
+  doc.rectangulo(MARGEN, y, anchoNota, 84, { relleno: COLOR.fondo, borde: COLOR.borde, radio: 8 });
+  rotulo(doc, 'Sobre esta cotización', MARGEN + 12, y + 11);
+  doc.parrafo(
+    'Es una estimación con la tarifa configurada hoy — el valor final que se ' +
+      'factura depende de los mensajes que WhatsApp acepte y despache de verdad ' +
+      '(los fallidos no se cobran). No es un documento fiscal.',
+    MARGEN + 12,
+    y + 26,
+    anchoNota - 24,
+    { tamano: 7.8, color: COLOR.suave, interlineado: 1.42 }
+  );
 
   pie(doc, doc.totalPaginas, piePagina);
   return doc.buffer();

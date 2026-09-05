@@ -147,6 +147,28 @@
             <button type="submit" class="btn btn-outline">Guardar</button>
           </form>
           <div id="numeroEmpresaResultado" class="result-box hidden"></div>
+
+          <h3>Tarifa por mensaje</h3>
+          <p class="muted">Se usa para la Cotización de abajo y para facturar en Historial.</p>
+          <button type="button" id="btnConfigurarTarifaEmpresa" class="btn btn-sm btn-outline">Configurar tarifa</button>
+        </div>
+
+        <div class="card">
+          <h2>Listas guardadas (<span id="totalListasEmpresa">0</span>)</h2>
+          <p class="muted">Cada importación queda guardada acá — "Usar esta lista" vuelve a seleccionar exactamente esos mismos contactos, sin reimportar el archivo.</p>
+          <div class="table-wrap">
+            <table class="tabla">
+              <thead>
+                <tr>
+                  <th>Archivo</th>
+                  <th>Contactos</th>
+                  <th>Fecha</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="tablaListasEmpresa"></tbody>
+            </table>
+          </div>
         </div>
 
         <div class="card">
@@ -194,6 +216,7 @@
             <div class="header-actions">
               <span id="seleccionadosCountEmpresa" class="muted">0 seleccionados</span>
               <button id="btnSeleccionarTodosEmpresa" class="btn btn-sm btn-outline">Seleccionar todos</button>
+              <button id="btnCotizacionEmpresa" class="btn btn-sm btn-outline">Cotización</button>
               <button id="btnEliminarTodosEmpresa" class="btn btn-sm btn-danger">Eliminar todos</button>
             </div>
           </div>
@@ -218,6 +241,11 @@
               <tbody id="tablaContactosEmpresa"></tbody>
             </table>
           </div>
+          <div id="cotizacionResultadoEmpresa" class="result-box hidden"></div>
+          <button type="button" id="btnDescargarCotizacionPdfEmpresa" class="btn btn-sm btn-outline hidden" style="margin-top: 8px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6" /></svg>
+            Descargar cotización en PDF
+          </button>
         </div>
 
         <div class="card">
@@ -287,6 +315,24 @@
       </div>
 
       <div class="card">
+        <h2>Listas guardadas (<span id="totalListas">0</span>)</h2>
+        <p class="muted">Cada importación queda guardada acá — "Usar esta lista" vuelve a seleccionar exactamente esos mismos contactos, sin reimportar el archivo.</p>
+        <div class="table-wrap">
+          <table class="tabla">
+            <thead>
+              <tr>
+                <th>Archivo</th>
+                <th>Contactos</th>
+                <th>Fecha</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="tablaListas"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
         <h2>Agregar contacto manual</h2>
         <form id="formAgregarContacto" class="inline-form">
           <div class="field">
@@ -314,6 +360,7 @@
           <div class="header-actions">
             <span id="seleccionadosCount" class="muted">0 seleccionados</span>
             <button id="btnSeleccionarTodos" class="btn btn-sm btn-outline">Seleccionar todos</button>
+            <button id="btnCotizacion" class="btn btn-sm btn-outline">Cotización</button>
             <button id="btnEliminarTodos" class="btn btn-sm btn-danger">Eliminar todos</button>
           </div>
         </div>
@@ -343,6 +390,11 @@
             <tbody id="tablaContactos"></tbody>
           </table>
         </div>
+        <div id="cotizacionResultado" class="result-box hidden"></div>
+        <button type="button" id="btnDescargarCotizacionPdf" class="btn btn-sm btn-outline hidden" style="margin-top: 8px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6" /></svg>
+          Descargar cotización en PDF
+        </button>
       </div>
     </section>
 

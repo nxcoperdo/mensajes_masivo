@@ -144,6 +144,19 @@ db.exec(`
     creado_en TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(cliente_id, phone_number_id)
   );
+
+  -- Cada importación de CSV/Excel queda guardada acá como un grupo
+  -- reutilizable de contactos (ver POST /api/contactos/importar), para
+  -- poder volver a seleccionar exactamente ese mismo lote después sin
+  -- reimportar el archivo ni tildar contacto por contacto.
+  CREATE TABLE IF NOT EXISTS listas_contactos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cliente_id INTEGER NOT NULL,
+    nombre TEXT NOT NULL,
+    contacto_ids_json TEXT NOT NULL DEFAULT '[]',
+    total INTEGER NOT NULL DEFAULT 0,
+    creado_en TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 /**

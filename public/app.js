@@ -449,6 +449,128 @@ function renderTablaContactos({ tbody, lista, seleccionados, editandoId, totalEl
   });
 }
 
+/**
+ * Dibuja la tabla de "listas guardadas" (importaciones reutilizables) — la
+ * usan tanto Contactos general como los contactos de una empresa. Cada
+ * importación de CSV/Excel queda acá como un grupo de ids reutilizable
+ * (ver POST /api/contactos/importar), para volver a seleccionarlo sin
+ * reimportar el archivo.
+ */
+function renderListasGuardadas({ tbody, totalEl, listas, onUsar, onEliminar }) {
+  tbody.innerHTML = '';
+  if (totalEl) totalEl.textContent = listas.length;
+
+  if (listas.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state">Todavía no hay ninguna importación guardada.</div></td></tr>`;
+    return;
+  }
+
+  listas.forEach((l) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(l.nombre)}</td>
+      <td>${l.total}</td>
+      <td>${formatearFechaHora(l.creado_en)}</td>
+      <td>
+        <button type="button" class="btn btn-sm btn-outline" data-usar-lista="${l.id}">Usar esta lista</button>
+        <button type="button" class="btn btn-sm btn-outline" data-borrar-lista="${l.id}">Eliminar</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  tbody.querySelectorAll('[data-usar-lista]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const lista = listas.find((l) => l.id === Number(btn.dataset.usarLista));
+      if (lista) onUsar(lista);
+    });
+  });
+  tbody.querySelectorAll('[data-borrar-lista]').forEach((btn) => {
+    btn.addEventListener('click', () => onEliminar(Number(btn.dataset.borrarLista)));
+  });
+}
+
+let listasGuardadas = [];
+
+async function cargarListas() {
+  const res = await fetch('/api/listas');
+  const data = await res.json();
+  listasGuardadas = data.listas || [];
+  renderListasGuardadas({
+    tbody: document.getElementById('tablaListas'),
+    totalEl: document.getElementById('totalListas'),
+    listas: listasGuardadas,
+    onUsar: (lista) => {
+      seleccionados.clear();
+      lista.contacto_ids.forEach((id) => seleccionados.add(id));
+      renderContactos();
+    },
+    onEliminar: async (id) => {
+      await fetch(`/api/listas/${id}`, { method: 'DELETE' });
+      cargarListas();
+    },
+  });
+}
+
+/**
+ * Calcula y muestra la cotización (contactos seleccionados × tarifa + IVA)
+ * usando la misma tarifa que ya se configura en Historial → Tarifa —
+ * la usan tanto Contactos general como la campaña de una empresa.
+ * `clienteId`: null para la cuenta propia, o el id de la empresa.
+ */
+async function calcularYMostrarCotizacion({ contactoIds, clienteId, box, btnDescargar }) {
+  if (contactoIds.length === 0) {
+    alert('No hay contactos seleccionados');
+    return;
+  }
+
+  box.classList.remove('hidden', 'error', 'ok');
+  box.textContent = 'Calculando…';
+  btnDescargar.classList.add('hidden');
+
+  const qs = clienteId ? `?cliente_id=${encodeURIComponent(clienteId)}` : '';
+  try {
+    const res = await fetch(`/api/facturacion/config${qs}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo obtener la tarifa configurada');
+
+    const { tarifa_por_mensaje: tarifa, moneda, iva_porcentaje: iva } = data.config;
+    if (!(tarifa > 0)) {
+      box.classList.add('error');
+      box.textContent = 'Todavía no hay una tarifa configurada para este cliente (botón "Tarifa" en Historial, o "Configurar tarifa" acá).';
+      return;
+    }
+
+    const subtotal = contactoIds.length * tarifa;
+    const ivaMonto = subtotal * (iva / 100);
+    const total = subtotal + ivaMonto;
+
+    box.classList.add('ok');
+    box.textContent = `${contactoIds.length} contactos × ${formatearTarifa(tarifa, moneda)} = ${formatearMoneda(subtotal, moneda)}` +
+      (iva > 0 ? `  +  IVA (${iva}%) ${formatearMoneda(ivaMonto, moneda)}` : '') +
+      `  =  Total estimado: ${formatearMoneda(total, moneda)}`;
+
+    btnDescargar.classList.remove('hidden');
+    btnDescargar.onclick = () => {
+      const params = new URLSearchParams({ contacto_ids: contactoIds.join(',') });
+      if (clienteId) params.set('cliente_id', clienteId);
+      descargarPdf(`/api/facturacion/cotizacion.pdf?${params}`, `cotizacion-${new Date().toISOString().slice(0, 10)}.pdf`, btnDescargar);
+    };
+  } catch (err) {
+    box.classList.add('error');
+    box.textContent = err.message;
+  }
+}
+
+document.getElementById('btnCotizacion').addEventListener('click', () => {
+  calcularYMostrarCotizacion({
+    contactoIds: Array.from(seleccionados),
+    clienteId: null,
+    box: document.getElementById('cotizacionResultado'),
+    btnDescargar: document.getElementById('btnDescargarCotizacionPdf'),
+  });
+});
+
 let editandoContactoId = null;
 
 function renderContactos() {
@@ -594,7 +716,9 @@ document.getElementById('formImportar').addEventListener('submit', async (e) => 
     }
     box.textContent = texto;
     document.getElementById('formImportar').reset();
+    (data.contacto_ids || []).forEach((id) => seleccionados.add(id));
     cargarContactos();
+    cargarListas();
   } catch (err) {
     box.classList.add('error');
     box.textContent = err.message;
@@ -697,8 +821,10 @@ async function abrirEmpresa(id) {
   empresaParametros = [];
   renderParametrosEmpresa();
   document.getElementById('empresaCampanaProgreso').classList.add('hidden');
+  document.getElementById('cotizacionResultadoEmpresa').classList.add('hidden');
+  document.getElementById('btnDescargarCotizacionPdfEmpresa').classList.add('hidden');
 
-  await Promise.all([cargarNumerosParaEmpresa(), cargarContactosEmpresa()]);
+  await Promise.all([cargarNumerosParaEmpresa(), cargarContactosEmpresa(), cargarListasEmpresa()]);
 }
 
 document.getElementById('btnVolverEmpresas').addEventListener('click', () => {
@@ -754,6 +880,56 @@ async function cargarContactosEmpresa() {
   empresaContactos = data.contactos;
   renderContactosEmpresa();
 }
+
+let empresaListasGuardadas = [];
+
+async function cargarListasEmpresa() {
+  const res = await fetch(`/api/listas${paramsEmpresaDetalle()}`);
+  const data = await res.json();
+  empresaListasGuardadas = data.listas || [];
+  renderListasGuardadas({
+    tbody: document.getElementById('tablaListasEmpresa'),
+    totalEl: document.getElementById('totalListasEmpresa'),
+    listas: empresaListasGuardadas,
+    onUsar: (lista) => {
+      empresaSeleccionados.clear();
+      lista.contacto_ids.forEach((id) => empresaSeleccionados.add(id));
+      renderContactosEmpresa();
+    },
+    onEliminar: async (id) => {
+      await fetch(`/api/listas/${id}${paramsEmpresaDetalle()}`, { method: 'DELETE' });
+      cargarListasEmpresa();
+    },
+  });
+}
+
+document.getElementById('btnCotizacionEmpresa').addEventListener('click', () => {
+  calcularYMostrarCotizacion({
+    contactoIds: Array.from(empresaSeleccionados),
+    clienteId: empresaDetalleId,
+    box: document.getElementById('cotizacionResultadoEmpresa'),
+    btnDescargar: document.getElementById('btnDescargarCotizacionPdfEmpresa'),
+  });
+});
+
+/**
+ * Abre Historial con esta empresa elegida en el selector admin y dispara
+ * el mismo formulario de tarifa que ya existe ahí — para no duplicar esa
+ * UI, se reusa el flujo entero (cargarClientesFacturables/facturacionConfig).
+ */
+document.getElementById('btnConfigurarTarifaEmpresa').addEventListener('click', async () => {
+  document.querySelector('.tab-btn[data-tab="historial"]').click();
+  await cargarClientesFacturables();
+  const empresaComoCliente = clientesFacturables.find((c) => c.cliente_id === empresaDetalleId);
+  if (empresaComoCliente) {
+    facturacionConfig = empresaComoCliente;
+    document.getElementById('clienteFacturar').value = String(empresaDetalleId);
+  }
+  renderResumenTarifa();
+  await cargarCampanas();
+  cargarFacturas();
+  document.getElementById('btnConfigTarifa').click();
+});
 
 let empresaEditandoContactoId = null;
 
@@ -882,7 +1058,9 @@ document.getElementById('formImportarEmpresa').addEventListener('submit', async 
     }
     box.textContent = texto;
     document.getElementById('formImportarEmpresa').reset();
+    (data.contacto_ids || []).forEach((id) => empresaSeleccionados.add(id));
     cargarContactosEmpresa();
+    cargarListasEmpresa();
   } catch (err) {
     box.classList.add('error');
     box.textContent = err.message;
@@ -2099,6 +2277,7 @@ document.getElementById('btnRefrescarConversaciones').addEventListener('click', 
   const conectado = await cargarConfig();
   if (!conectado) return; // pantalla "Conectar WhatsApp" ya se mostró — no hay nada más para cargar
   cargarContactos();
+  cargarListas();
   renderParametros();
   cargarConversaciones();
   setInterval(cargarConversaciones, 10000); // refresco periódico para el badge de "no leídos" en la pestaña
