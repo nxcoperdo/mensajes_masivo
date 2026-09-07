@@ -72,6 +72,9 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
     if (btn.dataset.tab === 'historial') {
       abrirHistorial();
     }
+    if (btn.dataset.tab === 'encuestas') {
+      cargarEncuestas();
+    }
     if (btn.dataset.tab === 'leads') {
       cargarLeads();
     }
@@ -352,7 +355,7 @@ if (formNumeroManual) {
 async function cargarContactos() {
   const res = await fetch('/api/contactos');
   const data = await res.json();
-  contactos = data.contactos;
+  contactos = Array.isArray(data.contactos) ? data.contactos : [];
   renderContactos();
 }
 
@@ -493,6 +496,19 @@ function renderListasGuardadas({ tbody, totalEl, listas, onUsar, onEliminar }) {
   });
 }
 
+/**
+ * Mensaje después de "Usar esta lista": distingue entre "no quedó nada"
+ * (todos los contactos de esa lista se borraron) y "quedaron algunos"
+ * (se reimportó parte, o se borraron algunos sueltos).
+ */
+function avisarSeleccionParcial(seleccionados, guardadosEnLista) {
+  if (seleccionados === 0) {
+    alert('Esa lista ya no tiene contactos: se borraron después de importarla (o se reimportó el archivo). Volvé a importar el CSV/Excel.');
+  } else if (seleccionados < guardadosEnLista) {
+    alert(`Se seleccionaron ${seleccionados} de ${guardadosEnLista}. Los otros ya no existen; reimportá el archivo si los necesitás.`);
+  }
+}
+
 let listasGuardadas = [];
 
 async function cargarListas() {
@@ -503,15 +519,19 @@ async function cargarListas() {
     tbody: document.getElementById('tablaListas'),
     totalEl: document.getElementById('totalListas'),
     listas: listasGuardadas,
-    onUsar: (lista) => {
+    onUsar: async (lista) => {
+      // Recargamos la tabla de contactos antes de tildar, y solo
+      // seleccionamos ids que EXISTEN de verdad en la lista cargada — así
+      // no queda "N seleccionados" fantasma cuando esos contactos ya se
+      // borraron o se reimportaron con otro id.
+      await cargarContactos();
+      const cargados = new Set(contactos.map((c) => c.id));
       seleccionados.clear();
-      lista.contacto_ids.forEach((id) => seleccionados.add(id));
+      lista.contacto_ids.forEach((id) => { if (cargados.has(id)) seleccionados.add(id); });
       renderContactos();
       const card = document.getElementById('tablaContactos').closest('.card');
       if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      if (seleccionados.size === 0) {
-        alert('Esa lista ya no tiene contactos vigentes (se borraron después de importarla). Reimportá el archivo.');
-      }
+      avisarSeleccionParcial(seleccionados.size, lista.contacto_ids.length);
     },
     onEliminar: async (id) => {
       await fetch(`/api/listas/${id}`, { method: 'DELETE' });
@@ -892,7 +912,7 @@ function paramsEmpresaDetalle() {
 async function cargarContactosEmpresa() {
   const res = await fetch(`/api/contactos${paramsEmpresaDetalle()}`);
   const data = await res.json();
-  empresaContactos = data.contactos;
+  empresaContactos = Array.isArray(data.contactos) ? data.contactos : [];
   renderContactosEmpresa();
 }
 
@@ -906,15 +926,15 @@ async function cargarListasEmpresa() {
     tbody: document.getElementById('tablaListasEmpresa'),
     totalEl: document.getElementById('totalListasEmpresa'),
     listas: empresaListasGuardadas,
-    onUsar: (lista) => {
+    onUsar: async (lista) => {
+      await cargarContactosEmpresa();
+      const cargados = new Set(empresaContactos.map((c) => c.id));
       empresaSeleccionados.clear();
-      lista.contacto_ids.forEach((id) => empresaSeleccionados.add(id));
+      lista.contacto_ids.forEach((id) => { if (cargados.has(id)) empresaSeleccionados.add(id); });
       renderContactosEmpresa();
       const card = document.getElementById('tablaContactosEmpresa').closest('.card');
       if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      if (empresaSeleccionados.size === 0) {
-        alert('Esa lista ya no tiene contactos vigentes (se borraron después de importarla). Reimportá el archivo.');
-      }
+      avisarSeleccionParcial(empresaSeleccionados.size, lista.contacto_ids.length);
     },
     onEliminar: async (id) => {
       await fetch(`/api/listas/${id}${paramsEmpresaDetalle()}`, { method: 'DELETE' });
@@ -1872,6 +1892,118 @@ function renderEstadisticas(resumen) {
 
   document.getElementById('cardEstadisticas').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
+
+// ==================== ENCUESTAS (respuestas de WhatsApp Flow) ====================
+
+let encuestaCampanas = [];
+
+async function cargarEncuestas() {
+  const box = document.getElementById('encuestaResultado');
+  box.classList.add('hidden');
+  try {
+    const res = await fetch('/api/flow/campanas');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudieron cargar las campañas de formulario');
+    encuestaCampanas = data.campanas || [];
+  } catch (err) {
+    box.classList.remove('hidden');
+    box.classList.add('error');
+    box.textContent = err.message;
+    return;
+  }
+
+  const vacia = document.getElementById('encuestaVacia');
+  const resumen = document.getElementById('encuestaResumen');
+  const select = document.getElementById('selectEncuesta');
+
+  if (encuestaCampanas.length === 0) {
+    vacia.classList.remove('hidden');
+    resumen.classList.add('hidden');
+    select.innerHTML = '';
+    document.getElementById('btnDescargarRespuestasCsv').classList.add('hidden');
+    return;
+  }
+
+  vacia.classList.add('hidden');
+  const seleccionActual = select.value;
+  select.innerHTML = encuestaCampanas
+    .map((c) => `<option value="${c.id}">#${c.id} · ${escapeHtml(c.template_nombre)} · ${c.respondidos}/${c.enviados} respondieron</option>`)
+    .join('');
+  if (seleccionActual && encuestaCampanas.some((c) => String(c.id) === seleccionActual)) {
+    select.value = seleccionActual;
+  }
+  await cargarEstadisticasEncuesta();
+}
+
+async function cargarEstadisticasEncuesta() {
+  const select = document.getElementById('selectEncuesta');
+  const campanaId = select.value;
+  if (!campanaId) return;
+  const box = document.getElementById('encuestaResultado');
+  const resumen = document.getElementById('encuestaResumen');
+  box.classList.add('hidden');
+
+  try {
+    const res = await fetch(`/api/flow/estadisticas?campana_id=${encodeURIComponent(campanaId)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudieron cargar las estadísticas');
+    renderEstadisticasEncuesta(data);
+    resumen.classList.remove('hidden');
+    document.getElementById('btnDescargarRespuestasCsv').classList.toggle('hidden', data.respondidos === 0);
+  } catch (err) {
+    resumen.classList.add('hidden');
+    box.classList.remove('hidden');
+    box.classList.add('error');
+    box.textContent = err.message;
+  }
+}
+
+function renderEstadisticasEncuesta(data) {
+  document.getElementById('encuestaEnviados').textContent = formatearNumero(data.enviados);
+  document.getElementById('encuestaRespondidos').textContent = formatearNumero(data.respondidos);
+  document.getElementById('encuestaTasa').textContent = `${Math.round((data.tasa || 0) * 100)}%`;
+
+  const cont = document.getElementById('encuestaPreguntas');
+  if (!data.preguntas || data.preguntas.length === 0) {
+    cont.innerHTML = `<p class="muted">Todavía no llegó ninguna respuesta de este formulario.</p>`;
+    return;
+  }
+
+  cont.innerHTML = data.preguntas
+    .map((p) => {
+      if (p.tipo === 'opciones') {
+        const barras = p.opciones
+          .map((o) => {
+            const pct = Math.round((o.pct || 0) * 100);
+            return `
+              <div class="encuesta-barra">
+                <span class="encuesta-barra-valor">${escapeHtml(o.valor)}</span>
+                <span class="encuesta-barra-track"><span class="encuesta-barra-fill" style="width:${pct}%"></span></span>
+                <span class="encuesta-barra-num">${o.n} · ${pct}%</span>
+              </div>`;
+          })
+          .join('');
+        return `<div class="encuesta-pregunta"><h4>${escapeHtml(p.etiqueta)} <span>(${p.total} respuestas)</span></h4>${barras}</div>`;
+      }
+      const items = p.textos
+        .map((t) => `<li>${escapeHtml(t.valor)} <span>— ${escapeHtml(t.nombre || t.telefono)}</span></li>`)
+        .join('');
+      return `<div class="encuesta-pregunta"><h4>${escapeHtml(p.etiqueta)} <span>(${p.total} respuestas abiertas)</span></h4><ul class="encuesta-textos">${items || '<li class="muted">Sin respuestas todavía</li>'}</ul></div>`;
+    })
+    .join('');
+}
+
+document.getElementById('selectEncuesta').addEventListener('change', cargarEstadisticasEncuesta);
+document.getElementById('btnRefrescarEncuesta').addEventListener('click', cargarEncuestas);
+document.getElementById('btnDescargarRespuestasCsv').addEventListener('click', (e) => {
+  const campanaId = document.getElementById('selectEncuesta').value;
+  if (!campanaId) return;
+  descargarPdf(
+    `/api/flow/respuestas.csv?campana_id=${encodeURIComponent(campanaId)}`,
+    `respuestas-formulario-${campanaId}.csv`,
+    e.currentTarget
+  );
+});
 
 // ---- Descargas de PDF ----
 

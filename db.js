@@ -157,6 +157,26 @@ db.exec(`
     total INTEGER NOT NULL DEFAULT 0,
     creado_en TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  -- Respuestas de formularios nativos de WhatsApp (Flow) que llegan por
+  -- el webhook (mensaje interactive de subtipo nfm_reply). Cada fila es
+  -- un envío del formulario por parte de un contacto. respuestas_json
+  -- guarda el objeto crudo { campo: valor } tal cual lo manda Meta; la
+  -- campaña se asocia por teléfono contra el último envío Flow de ese
+  -- cliente. Alimenta la pestaña "Encuestas" (estadísticas). Ver server.js.
+  CREATE TABLE IF NOT EXISTS respuestas_flow (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cliente_id INTEGER NOT NULL,
+    telefono TEXT NOT NULL,
+    campana_id INTEGER,
+    template_nombre TEXT,
+    respuestas_json TEXT NOT NULL DEFAULT '{}',
+    wa_message_id TEXT,
+    recibido_en TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_respuestas_flow_cliente ON respuestas_flow(cliente_id, campana_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_respuestas_flow_wamid ON respuestas_flow(wa_message_id);
 `);
 
 /**

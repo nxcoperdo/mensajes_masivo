@@ -1349,3 +1349,60 @@ tfoot#pieEstadisticas td {
 /* La columna de acciones del historial no debe partir el botón en dos
    renglones — si la tabla no entra, que scrollee `.table-wrap`. */
 .tabla td .btn { white-space: nowrap; }
+
+/* ---- Encuestas / respuestas de formularios (WhatsApp Flow) ---- */
+
+.encuesta-pregunta {
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--color-border);
+}
+.encuesta-pregunta:first-child { border-top: none; }
+.encuesta-pregunta h4 {
+  margin: 0 0 var(--space-3);
+  font-size: 14px;
+  font-weight: 700;
+}
+.encuesta-pregunta h4 span {
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
+.encuesta-barra {
+  display: grid;
+  grid-template-columns: minmax(120px, 220px) 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.encuesta-barra-valor { overflow-wrap: anywhere; }
+.encuesta-barra-track {
+  height: 14px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.encuesta-barra-fill {
+  height: 100%;
+  background: var(--crt-blue);
+  border-radius: 999px;
+}
+.encuesta-barra-num {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+.encuesta-textos {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.encuesta-textos li span { color: var(--color-text-muted); }
+
+@media (max-width: 560px) {
+  .encuesta-barra { grid-template-columns: 1fr auto; }
+  .encuesta-barra-track { grid-column: 1 / -1; }
+}

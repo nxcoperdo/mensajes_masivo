@@ -78,6 +78,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 3" /></svg>
       Historial
     </button>
+    <button class="tab-btn" data-tab="encuestas">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>
+      Encuestas
+    </button>
     <button class="tab-btn" data-tab="leads">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
       Leads
@@ -639,6 +643,43 @@
             <tbody id="tablaEnvios"></tbody>
           </table>
         </div>
+      </div>
+    </section>
+
+    <!-- ===================== TAB: ENCUESTAS (respuestas de WhatsApp Flow) ===================== -->
+    <section id="tab-encuestas" class="tab-panel">
+      <div class="card">
+        <div class="card-header">
+          <h2>Respuestas de formularios</h2>
+          <div class="header-actions">
+            <div class="field">
+              <label for="selectEncuesta" class="sr-only">Campaña de formulario</label>
+              <select id="selectEncuesta" title="Elegí una campaña de formulario"></select>
+            </div>
+            <button type="button" id="btnRefrescarEncuesta" class="btn btn-sm btn-outline">Actualizar</button>
+            <button type="button" id="btnDescargarRespuestasCsv" class="btn btn-sm btn-outline hidden">Descargar CSV</button>
+          </div>
+        </div>
+        <p class="muted">Solo aparecen acá las campañas enviadas con la opción "La plantilla abre un formulario (Flow)". Las respuestas llegan por el webhook a medida que la gente completa el formulario.</p>
+        <div id="encuestaVacia" class="empty-state hidden">Todavía no hay campañas de formulario enviadas.</div>
+        <div id="encuestaResumen" class="hidden">
+          <div class="kpi-grid">
+            <div class="kpi kpi-azul">
+              <span class="kpi-etiqueta">Enviados</span>
+              <span class="kpi-valor" id="encuestaEnviados">0</span>
+            </div>
+            <div class="kpi kpi-azul">
+              <span class="kpi-etiqueta">Respondieron</span>
+              <span class="kpi-valor" id="encuestaRespondidos">0</span>
+            </div>
+            <div class="kpi kpi-destacada">
+              <span class="kpi-etiqueta">Tasa de respuesta</span>
+              <span class="kpi-valor" id="encuestaTasa">0%</span>
+            </div>
+          </div>
+          <div id="encuestaPreguntas"></div>
+        </div>
+        <div id="encuestaResultado" class="result-box hidden"></div>
       </div>
     </section>
 

@@ -957,6 +957,193 @@ app.post('/api/campanas/:id/cancelar', (req, res) => {
   res.json({ ok: true });
 });
 
+// ==================== ENCUESTAS / FORMULARIOS (WhatsApp Flow) ====================
+//
+// Las respuestas entran por el webhook (ver `guardarRespuestaFlow`) y se
+// guardan en `respuestas_flow`. Acá se listan las campañas de tipo
+// formulario y se arman las estadísticas agregadas por pregunta.
+
+/**
+ * Limpia el nombre técnico de un campo del Flow ("screen_0_Que_tan_
+ * satisfecho") para mostrarlo ("Que tan satisfecho").
+ */
+function etiquetaCampoFlow(clave) {
+  return String(clave).replace(/^screen_\d+_/i, '').replace(/_/g, ' ').trim() || String(clave);
+}
+
+/**
+ * Dada la lista de respuestas (una por contacto, con `datos` = objeto
+ * { campo: valor }), arma el resumen por pregunta. Si una pregunta tiene
+ * pocas respuestas distintas y cortas, se trata como "opciones" (conteo
+ * por valor, para gráfico de barras); si no, como "texto" (lista de
+ * respuestas abiertas).
+ */
+function agregarPreguntasFlow(respuestas) {
+  const claves = [];
+  const vistas = new Set();
+  for (const r of respuestas) {
+    for (const k of Object.keys(r.datos || {})) {
+      if (!vistas.has(k)) { vistas.add(k); claves.push(k); }
+    }
+  }
+
+  return claves.map((clave) => {
+    const valores = [];
+    for (const r of respuestas) {
+      const v = r.datos?.[clave];
+      if (v === undefined || v === null || v === '') continue;
+      if (Array.isArray(v)) valores.push(...v.map(String));
+      else valores.push(String(v));
+    }
+    const distintos = new Set(valores);
+    const etiqueta = etiquetaCampoFlow(clave);
+    // "opciones" = pregunta cerrada (radio, dropdown, checkbox): pocas
+    // respuestas distintas y cortas. Si con suficientes respuestas casi
+    // todas son distintas, es texto libre (un comentario) y se lista
+    // en vez de graficarse.
+    const proporcionUnica = valores.length ? distintos.size / valores.length : 0;
+    const esOpciones =
+      distintos.size > 0 &&
+      distintos.size <= 15 &&
+      [...distintos].every((v) => v.length <= 45) &&
+      !(valores.length >= 6 && proporcionUnica > 0.8);
+
+    if (esOpciones) {
+      const conteo = {};
+      for (const v of valores) conteo[v] = (conteo[v] || 0) + 1;
+      const opciones = Object.entries(conteo)
+        .map(([valor, n]) => ({ valor, n, pct: valores.length ? n / valores.length : 0 }))
+        .sort((a, b) => b.n - a.n);
+      return { clave, etiqueta, tipo: 'opciones', total: valores.length, opciones };
+    }
+
+    const textos = respuestas
+      .filter((r) => r.datos?.[clave] !== undefined && r.datos?.[clave] !== null && r.datos?.[clave] !== '')
+      .map((r) => ({ telefono: r.telefono, nombre: r.nombre, valor: String(r.datos[clave]) }));
+    return { clave, etiqueta, tipo: 'texto', total: textos.length, textos };
+  });
+}
+
+/**
+ * Junta las respuestas de una campaña de formulario, deduplicadas por
+ * teléfono (si alguien mandó el formulario dos veces, vale la última), y
+ * con el nombre del contacto resuelto.
+ */
+function respuestasDeCampana(campanaId, clienteId) {
+  const filas = db
+    .prepare('SELECT telefono, respuestas_json, recibido_en FROM respuestas_flow WHERE campana_id = ? ORDER BY id ASC')
+    .all(campanaId);
+  const porTelefono = new Map();
+  for (const f of filas) porTelefono.set(f.telefono, f);
+
+  return [...porTelefono.values()].map((f) => {
+    let datos = {};
+    try {
+      datos = JSON.parse(f.respuestas_json || '{}');
+    } catch {
+      datos = {};
+    }
+    const nombre = db
+      .prepare('SELECT nombre FROM contactos WHERE telefono = ? AND cliente_id = ?')
+      .get(f.telefono, clienteId)?.nombre || null;
+    return { telefono: f.telefono, nombre, recibido_en: f.recibido_en, datos };
+  });
+}
+
+/** Lista las campañas de tipo formulario con enviados vs respondidos. */
+app.get('/api/flow/campanas', (req, res) => {
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.query.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  const campanas = db
+    .prepare(
+      `SELECT c.id, c.template_nombre, c.creado_en, c.fecha_programada, c.estado,
+              (SELECT COUNT(*) FROM envios e WHERE e.campana_id = c.id AND e.estado = 'enviado') AS enviados,
+              (SELECT COUNT(DISTINCT r.telefono) FROM respuestas_flow r WHERE r.campana_id = c.id) AS respondidos
+         FROM campanas c
+        WHERE c.cliente_id = ? AND c.flow_boton = 1
+        ORDER BY c.id DESC`
+    )
+    .all(cliente.id);
+
+  res.json({ campanas });
+});
+
+/** Estadísticas agregadas (por pregunta) de una campaña de formulario. */
+app.get('/api/flow/estadisticas', (req, res) => {
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.query.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  const campanaId = Number(req.query.campana_id);
+  if (!campanaId) return res.status(400).json({ error: 'Falta campana_id' });
+
+  const campana = db
+    .prepare('SELECT * FROM campanas WHERE id = ? AND cliente_id = ? AND flow_boton = 1')
+    .get(campanaId, cliente.id);
+  if (!campana) return res.status(404).json({ error: 'No hay una campaña de formulario con ese id' });
+
+  const enviados = db
+    .prepare(`SELECT COUNT(*) AS n FROM envios WHERE campana_id = ? AND estado = 'enviado'`)
+    .get(campanaId).n;
+  const respuestas = respuestasDeCampana(campanaId, cliente.id);
+
+  res.json({
+    campana: { id: campana.id, template_nombre: campana.template_nombre },
+    enviados,
+    respondidos: respuestas.length,
+    tasa: enviados > 0 ? respuestas.length / enviados : 0,
+    preguntas: agregarPreguntasFlow(respuestas),
+    respuestas,
+  });
+});
+
+/** Descarga de todas las respuestas de una campaña de formulario en CSV. */
+app.get('/api/flow/respuestas.csv', (req, res) => {
+  const { cliente, error, status } = resolverClienteObjetivo(req, req.query.cliente_id);
+  if (error) return res.status(status).json({ error });
+
+  const campanaId = Number(req.query.campana_id);
+  if (!campanaId) return res.status(400).json({ error: 'Falta campana_id' });
+
+  const campana = db
+    .prepare('SELECT * FROM campanas WHERE id = ? AND cliente_id = ? AND flow_boton = 1')
+    .get(campanaId, cliente.id);
+  if (!campana) return res.status(404).json({ error: 'No hay una campaña de formulario con ese id' });
+
+  const respuestas = respuestasDeCampana(campanaId, cliente.id);
+  const claves = [];
+  const vistas = new Set();
+  for (const r of respuestas) {
+    for (const k of Object.keys(r.datos || {})) {
+      if (!vistas.has(k)) { vistas.add(k); claves.push(k); }
+    }
+  }
+
+  const escapar = (v) => {
+    const s = v === undefined || v === null ? '' : String(v);
+    return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const encabezados = ['telefono', 'nombre', 'recibido_en', ...claves.map(etiquetaCampoFlow)];
+  const lineas = [encabezados.map(escapar).join(',')];
+  for (const r of respuestas) {
+    const fila = [
+      r.telefono,
+      r.nombre || '',
+      r.recibido_en,
+      ...claves.map((k) => {
+        const v = r.datos?.[k];
+        return Array.isArray(v) ? v.join(' | ') : v ?? '';
+      }),
+    ];
+    lineas.push(fila.map(escapar).join(','));
+  }
+
+  const nombreArchivo = `respuestas-${(campana.template_nombre || 'formulario').replace(/[^a-z0-9_-]+/gi, '_')}.csv`;
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${nombreArchivo}"`);
+  res.send('﻿' + lineas.join('\r\n'));
+});
+
 // ==================== FACTURACIÓN ====================
 //
 // Se factura POR MENSAJE ENVIADO: cuenta cada fila de `envios` que no
@@ -1650,6 +1837,50 @@ function extraerMedia(msg) {
   return { mediaId: campo.id || null, mimeType: campo.mime_type || null };
 }
 
+const insertRespuestaFlow = db.prepare(`
+  INSERT OR IGNORE INTO respuestas_flow (cliente_id, telefono, campana_id, template_nombre, respuestas_json, wa_message_id)
+  VALUES (?, ?, ?, ?, ?, ?)
+`);
+
+/**
+ * Guarda la respuesta de un formulario nativo (WhatsApp Flow) para la
+ * pestaña "Encuestas". La campaña se resuelve por teléfono: la última
+ * campaña con `flow_boton = 1` de este cliente que se le envió a ese
+ * número (el `flow_token` que mandamos es justamente el teléfono, así
+ * que coincide con `msg.from`). Si no hay match, se guarda igual con
+ * `campana_id` nulo.
+ */
+function guardarRespuestaFlow(clienteId, telefono, msg) {
+  const nfm = msg.interactive?.nfm_reply;
+  if (!nfm) return;
+  let respuestas;
+  try {
+    respuestas = JSON.parse(nfm.response_json || '{}');
+  } catch {
+    return;
+  }
+  if (!respuestas || typeof respuestas !== 'object') return;
+  delete respuestas.flow_token;
+
+  const campana = db
+    .prepare(
+      `SELECT c.id, c.template_nombre
+         FROM envios e JOIN campanas c ON c.id = e.campana_id
+        WHERE e.telefono = ? AND c.cliente_id = ? AND c.flow_boton = 1
+        ORDER BY e.id DESC LIMIT 1`
+    )
+    .get(telefono, clienteId);
+
+  insertRespuestaFlow.run(
+    clienteId,
+    telefono,
+    campana?.id || null,
+    campana?.template_nombre || null,
+    JSON.stringify(respuestas),
+    msg.id || null
+  );
+}
+
 function aplicarEstadoSiCorresponde(tabla, waMessageId, nuevoEstado, error) {
   const fila = db.prepare(`SELECT estado FROM ${tabla} WHERE wa_message_id = ?`).get(waMessageId);
   if (!fila) return;
@@ -1691,6 +1922,10 @@ function procesarWebhookWhatsApp(body) {
           nombresPerfil[telefono] || null,
           cliente.id
         );
+
+        if (msg.type === 'interactive' && msg.interactive?.type === 'nfm_reply') {
+          guardarRespuestaFlow(cliente.id, telefono, msg);
+        }
       }
 
       for (const estado of valor.statuses || []) {
