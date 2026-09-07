@@ -467,12 +467,15 @@ function renderListasGuardadas({ tbody, totalEl, listas, onUsar, onEliminar }) {
 
   listas.forEach((l) => {
     const tr = document.createElement('tr');
+    const notaObsoletos = l.obsoletos > 0
+      ? ` <span class="muted">(${l.obsoletos} ya no existen)</span>`
+      : '';
     tr.innerHTML = `
       <td>${escapeHtml(l.nombre)}</td>
-      <td>${l.total}</td>
+      <td>${l.total}${notaObsoletos}</td>
       <td>${formatearFechaHora(l.creado_en)}</td>
       <td>
-        <button type="button" class="btn btn-sm btn-outline" data-usar-lista="${l.id}">Usar esta lista</button>
+        <button type="button" class="btn btn-sm btn-outline" data-usar-lista="${l.id}"${l.total === 0 ? ' disabled' : ''}>Usar esta lista</button>
         <button type="button" class="btn btn-sm btn-outline" data-borrar-lista="${l.id}">Eliminar</button>
       </td>
     `;
@@ -504,6 +507,11 @@ async function cargarListas() {
       seleccionados.clear();
       lista.contacto_ids.forEach((id) => seleccionados.add(id));
       renderContactos();
+      const card = document.getElementById('tablaContactos').closest('.card');
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (seleccionados.size === 0) {
+        alert('Esa lista ya no tiene contactos vigentes (se borraron después de importarla). Reimportá el archivo.');
+      }
     },
     onEliminar: async (id) => {
       await fetch(`/api/listas/${id}`, { method: 'DELETE' });
@@ -902,6 +910,11 @@ async function cargarListasEmpresa() {
       empresaSeleccionados.clear();
       lista.contacto_ids.forEach((id) => empresaSeleccionados.add(id));
       renderContactosEmpresa();
+      const card = document.getElementById('tablaContactosEmpresa').closest('.card');
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (empresaSeleccionados.size === 0) {
+        alert('Esa lista ya no tiene contactos vigentes (se borraron después de importarla). Reimportá el archivo.');
+      }
     },
     onEliminar: async (id) => {
       await fetch(`/api/listas/${id}${paramsEmpresaDetalle()}`, { method: 'DELETE' });
@@ -1090,6 +1103,10 @@ document.getElementById('checkFechaIndividualEmpresa').addEventListener('change'
   document.getElementById('campoFechaComunEmpresa').classList.toggle('hidden', e.target.checked);
 });
 
+document.getElementById('checkFlowBotonEmpresa').addEventListener('change', (e) => {
+  document.getElementById('campoFlowActionDataEmpresa').classList.toggle('hidden', !e.target.checked);
+});
+
 document.getElementById('btnEnviarCampanaEmpresa').addEventListener('click', async () => {
   const template_nombre = document.getElementById('templateNombreEmpresa').value.trim();
   const idioma = document.getElementById('templateIdiomaEmpresa').value.trim() || 'es';
@@ -1104,6 +1121,12 @@ document.getElementById('btnEnviarCampanaEmpresa').addEventListener('click', asy
   }
   if (contacto_ids.length === 0) {
     alert('No hay contactos seleccionados para esta empresa');
+    return;
+  }
+  const flowBoton = document.getElementById('checkFlowBotonEmpresa').checked;
+  const flowActionData = leerFlowActionData(document.getElementById('inputFlowActionDataEmpresa'));
+  if (flowBoton && !flowActionData.ok) {
+    alert('El JSON de "Datos para la primera pantalla del formulario" no es válido. Dejalo vacío si no lo necesitás.');
     return;
   }
   const confirmacion = individual
@@ -1133,6 +1156,10 @@ document.getElementById('btnEnviarCampanaEmpresa').addEventListener('click', asy
     }
     if (document.getElementById('checkRecurrenteMensualEmpresa').checked) {
       formData.append('recurrente_mensual', 'true');
+    }
+    if (flowBoton) {
+      formData.append('flow_boton', 'true');
+      if (flowActionData.valor) formData.append('flow_action_data', flowActionData.valor);
     }
     const archivoImagen = document.getElementById('templateImagenEmpresa').files[0];
     if (archivoImagen) formData.append('imagen', archivoImagen);
@@ -1239,6 +1266,27 @@ document.getElementById('checkFechaIndividual').addEventListener('change', (e) =
   document.getElementById('campoFechaComun').classList.toggle('hidden', e.target.checked);
 });
 
+document.getElementById('checkFlowBoton').addEventListener('change', (e) => {
+  document.getElementById('campoFlowActionData').classList.toggle('hidden', !e.target.checked);
+});
+
+/**
+ * Valida el JSON opcional de `flow_action_data` antes de mandar la
+ * campaña. Devuelve `{ ok, valor }`: `valor` es el string a mandar (o
+ * '' si está vacío), y `ok=false` si el usuario escribió algo que no
+ * parsea como JSON.
+ */
+function leerFlowActionData(input) {
+  const texto = input.value.trim();
+  if (!texto) return { ok: true, valor: '' };
+  try {
+    JSON.parse(texto);
+    return { ok: true, valor: texto };
+  } catch {
+    return { ok: false, valor: texto };
+  }
+}
+
 document.getElementById('btnEnviarCampana').addEventListener('click', async () => {
   const template_nombre = document.getElementById('templateNombre').value.trim();
   const idioma = document.getElementById('templateIdioma').value.trim() || 'es';
@@ -1253,6 +1301,12 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
   }
   if (contacto_ids.length === 0) {
     alert('No hay contactos seleccionados (elegilos en la pestaña "Contactos")');
+    return;
+  }
+  const flowBoton = document.getElementById('checkFlowBoton').checked;
+  const flowActionData = leerFlowActionData(document.getElementById('inputFlowActionData'));
+  if (flowBoton && !flowActionData.ok) {
+    alert('El JSON de "Datos para la primera pantalla del formulario" no es válido. Dejalo vacío si no lo necesitás.');
     return;
   }
   const confirmacion = individual
@@ -1281,6 +1335,10 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
     }
     if (document.getElementById('checkRecurrenteMensual').checked) {
       formData.append('recurrente_mensual', 'true');
+    }
+    if (flowBoton) {
+      formData.append('flow_boton', 'true');
+      if (flowActionData.valor) formData.append('flow_action_data', flowActionData.valor);
     }
     const archivoImagen = document.getElementById('templateImagen').files[0];
     if (archivoImagen) formData.append('imagen', archivoImagen);

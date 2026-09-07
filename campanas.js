@@ -62,8 +62,8 @@ function clonarParaElMesSiguiente(campana) {
 
   const result = db
     .prepare(
-      `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id, fecha_programada, contacto_ids_json, recurrente_mensual)
-       VALUES (?, ?, ?, ?, ?, ?, 'programada', ?, ?, ?, 1)`
+      `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id, fecha_programada, contacto_ids_json, recurrente_mensual, flow_boton, flow_action_data_json)
+       VALUES (?, ?, ?, ?, ?, ?, 'programada', ?, ?, ?, 1, ?, ?)`
     )
     .run(
       campana.template_nombre,
@@ -74,7 +74,9 @@ function clonarParaElMesSiguiente(campana) {
       campana.total_contactos,
       campana.cliente_id,
       siguienteFecha,
-      campana.contacto_ids_json
+      campana.contacto_ids_json,
+      campana.flow_boton ? 1 : 0,
+      campana.flow_action_data_json || null
     );
 
   let contactoIds = [];
@@ -108,6 +110,8 @@ export async function procesarCampana({
   contactos,
   phoneNumberId,
   accessToken,
+  flowBoton = false,
+  flowActionData = null,
 }) {
   const delayMs = Number(process.env.ENVIO_DELAY_MS) || 250;
   const insertEnvio = db.prepare(`
@@ -127,6 +131,11 @@ export async function procesarCampana({
       accessToken,
       headerMediaId: imagenMediaId,
       headerMediaTipo: encabezadoTipo,
+      flowButton: !!flowBoton,
+      // El teléfono vuelve en el webhook `flow` cuando el contacto
+      // completa el formulario, así se sabe quién respondió.
+      flowToken: flowBoton ? contacto.telefono : undefined,
+      flowActionData: flowActionData || undefined,
     });
 
     insertEnvio.run(

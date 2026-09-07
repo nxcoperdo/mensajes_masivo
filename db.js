@@ -257,6 +257,18 @@ agregarColumnaSiFalta('clientes', 'es_empresa_gestionada INTEGER NOT NULL DEFAUL
 agregarColumnaSiFalta('campanas', 'recurrente_mensual INTEGER NOT NULL DEFAULT 0');
 
 /**
+ * Plantillas con un botón de formulario nativo de WhatsApp ("Flow"):
+ * al enviarlas hay que agregar un componente `button` de `sub_type:
+ * 'flow'` en el payload, si no Meta rechaza con el error 131009
+ * ("Components sub_type invalid"). `flow_boton` prende ese componente y
+ * `flow_action_data_json` guarda datos opcionales para la primera
+ * pantalla del formulario (la mayoría de las encuestas no lo necesitan).
+ * Ver `sendTemplate` en whatsapp.js.
+ */
+agregarColumnaSiFalta('campanas', 'flow_boton INTEGER NOT NULL DEFAULT 0');
+agregarColumnaSiFalta('campanas', 'flow_action_data_json TEXT');
+
+/**
  * `contactos` y `leads_prospectos` tenían `UNIQUE(telefono)` a nivel de
  * columna (una sola columna) antes del modelo multi-tenant — ese índice
  * viejo no se puede alterar con ALTER TABLE, así que en bases con datos

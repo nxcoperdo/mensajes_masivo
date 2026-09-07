@@ -60,6 +60,13 @@ async function revisarProgramadas() {
       parametrosDef = [];
     }
 
+    let flowActionData = null;
+    try {
+      flowActionData = campana.flow_action_data_json ? JSON.parse(campana.flow_action_data_json) : null;
+    } catch {
+      flowActionData = null;
+    }
+
     try {
       await procesarCampana({
         campanaId: campana.id,
@@ -71,6 +78,8 @@ async function revisarProgramadas() {
         contactos,
         phoneNumberId: cliente.phone_number_id,
         accessToken: cliente.access_token,
+        flowBoton: !!campana.flow_boton,
+        flowActionData,
       });
     } catch (err) {
       console.error(`[scheduler] error procesando campaña ${id}:`, err.message);

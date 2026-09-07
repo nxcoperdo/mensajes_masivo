@@ -105,9 +105,20 @@ export async function subirMedia(buffer, mimetype, phoneNumberId, accessToken) {
  *   plantilla tiene una imagen o un video en el encabezado
  * @param {'image'|'video'} [params.headerMediaTipo] - tipo del media de
  *   encabezado (default 'image')
+ * @param {boolean} [params.flowButton] - true si la plantilla tiene un
+ *   botón de formulario nativo (WhatsApp Flow). Sin este componente Meta
+ *   rechaza el envío con el error 131009 ("Components sub_type invalid").
+ * @param {string} [params.flowToken] - identificador que vuelve en el
+ *   webhook cuando el usuario completa el formulario (default 'unused').
+ *   Conviene pasar algo que identifique al contacto (ej: su teléfono).
+ * @param {Object} [params.flowActionData] - datos para la primera
+ *   pantalla del Flow, solo si esa pantalla los pide (la mayoría de las
+ *   encuestas no).
+ * @param {string|number} [params.flowButtonIndex] - posición del botón
+ *   de Flow en la plantilla (default '0').
  * @returns {Promise<{ok: boolean, messageId?: string, error?: string}>}
  */
-export async function sendTemplate({ to, template, languageCode, parameters = [], phoneNumberId, accessToken, headerMediaId, headerMediaTipo }) {
+export async function sendTemplate({ to, template, languageCode, parameters = [], phoneNumberId, accessToken, headerMediaId, headerMediaTipo, flowButton, flowToken, flowActionData, flowButtonIndex }) {
   const config = getConfig(phoneNumberId, accessToken);
   if (!config) {
     return { ok: false, error: 'WhatsApp no configurado para este cliente (conectá tu cuenta de WhatsApp Business)' };
@@ -125,6 +136,18 @@ export async function sendTemplate({ to, template, languageCode, parameters = []
   }
   if (parameters.length) {
     components.push({ type: 'body', parameters: parameters.map((p) => ({ type: 'text', text: String(p) })) });
+  }
+  if (flowButton) {
+    const action = { flow_token: flowToken ? String(flowToken) : 'unused' };
+    if (flowActionData && typeof flowActionData === 'object' && Object.keys(flowActionData).length > 0) {
+      action.flow_action_data = flowActionData;
+    }
+    components.push({
+      type: 'button',
+      sub_type: 'flow',
+      index: String(flowButtonIndex ?? '0'),
+      parameters: [{ type: 'action', action }],
+    });
   }
 
   const body = {

@@ -425,11 +425,36 @@ app.post('/api/contactos', (req, res) => {
   }
 });
 
+/**
+ * Reajusta las "listas guardadas" de un cliente después de borrar
+ * contactos: saca de cada lista los ids que ya no existen y elimina las
+ * listas que quedaron sin ningún contacto vivo — así no se acumulan
+ * importaciones fantasma que solo confunden ("Usar esta lista" que no
+ * selecciona nada).
+ */
+function limpiarListasObsoletas(clienteId) {
+  const idsVivos = new Set(
+    db.prepare('SELECT id FROM contactos WHERE cliente_id = ?').all(clienteId).map((c) => c.id)
+  );
+  const listas = db.prepare('SELECT * FROM listas_contactos WHERE cliente_id = ?').all(clienteId);
+  for (const l of listas) {
+    const guardados = JSON.parse(l.contacto_ids_json || '[]');
+    const vigentes = guardados.filter((id) => idsVivos.has(id));
+    if (vigentes.length === 0) {
+      db.prepare('DELETE FROM listas_contactos WHERE id = ?').run(l.id);
+    } else if (vigentes.length !== guardados.length) {
+      db.prepare('UPDATE listas_contactos SET contacto_ids_json = ?, total = ? WHERE id = ?')
+        .run(JSON.stringify(vigentes), vigentes.length, l.id);
+    }
+  }
+}
+
 app.delete('/api/contactos', (req, res) => {
   const { cliente, error, status } = resolverClienteObjetivo(req, req.query.cliente_id);
   if (error) return res.status(status).json({ error });
 
   db.prepare('DELETE FROM contactos WHERE cliente_id = ?').run(cliente.id);
+  limpiarListasObsoletas(cliente.id);
   res.json({ ok: true });
 });
 
@@ -438,6 +463,7 @@ app.delete('/api/contactos/:id', (req, res) => {
   if (error) return res.status(status).json({ error });
 
   db.prepare('DELETE FROM contactos WHERE id = ? AND cliente_id = ?').run(req.params.id, cliente.id);
+  limpiarListasObsoletas(cliente.id);
   res.json({ ok: true });
 });
 
@@ -588,14 +614,32 @@ app.get('/api/listas', (req, res) => {
   const listas = db
     .prepare('SELECT * FROM listas_contactos WHERE cliente_id = ? ORDER BY id DESC')
     .all(cliente.id);
+
+  // Los ids guardados en la lista pueden quedar obsoletos: si después se
+  // borraron esos contactos, o se reimportó el mismo archivo (el import
+  // crea filas con ids NUEVOS cuando los viejos ya no están), la lista
+  // seguiría apuntando a ids que ya no existen. Sin filtrar, "Usar esta
+  // lista" seleccionaba ids muertos —> no se tildaba ningún contacto y la
+  // campaña fallaba con "No se encontraron los contactos seleccionados".
+  // Resolvemos contra los contactos que existen HOY para este cliente.
+  const idsVivos = new Set(
+    db.prepare('SELECT id FROM contactos WHERE cliente_id = ?').all(cliente.id).map((c) => c.id)
+  );
+
   res.json({
-    listas: listas.map((l) => ({
-      id: l.id,
-      nombre: l.nombre,
-      total: l.total,
-      creado_en: l.creado_en,
-      contacto_ids: JSON.parse(l.contacto_ids_json || '[]'),
-    })),
+    listas: listas.map((l) => {
+      const guardados = JSON.parse(l.contacto_ids_json || '[]');
+      const vigentes = guardados.filter((id) => idsVivos.has(id));
+      return {
+        id: l.id,
+        nombre: l.nombre,
+        total: vigentes.length,
+        total_guardado: l.total,
+        obsoletos: guardados.length - vigentes.length,
+        creado_en: l.creado_en,
+        contacto_ids: vigentes,
+      };
+    }),
   });
 });
 
@@ -723,15 +767,20 @@ app.post('/api/campanas', (req, res) => {
     const { cliente, error, status } = resolverClienteObjetivo(req, req.body?.cliente_id);
     if (error) return res.status(status).json({ error });
 
-    const { template_nombre, idioma, fecha_programada, individual, recurrente_mensual } = req.body || {};
+    const { template_nombre, idioma, fecha_programada, individual, recurrente_mensual, flow_boton } = req.body || {};
     const esRecurrenteMensual = recurrente_mensual === 'true' || recurrente_mensual === true ? 1 : 0;
-    let contacto_ids, parametros;
+    const esFlowBoton = flow_boton === 'true' || flow_boton === true ? 1 : 0;
+    let contacto_ids, parametros, flowActionData;
     try {
       contacto_ids = JSON.parse(req.body?.contacto_ids || '[]');
       parametros = JSON.parse(req.body?.parametros || '[]');
+      // Datos opcionales para la primera pantalla del Flow (raro; la
+      // mayoría de las encuestas no lo necesitan).
+      flowActionData = req.body?.flow_action_data ? JSON.parse(req.body.flow_action_data) : null;
     } catch {
-      return res.status(400).json({ error: 'Formato inválido en contacto_ids/parametros' });
+      return res.status(400).json({ error: 'Formato inválido en contacto_ids / parametros / flow_action_data' });
     }
+    const flowActionDataJson = flowActionData && Object.keys(flowActionData).length > 0 ? JSON.stringify(flowActionData) : null;
 
     if (!template_nombre || !String(template_nombre).trim()) {
       return res.status(400).json({ error: 'Falta el nombre de la plantilla' });
@@ -802,8 +851,8 @@ app.post('/api/campanas', (req, res) => {
         const futura = esFechaFutura(fechaProgramada);
         const result = db
           .prepare(
-            `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id, fecha_programada, contacto_ids_json, recurrente_mensual)
-             VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`
+            `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id, fecha_programada, contacto_ids_json, recurrente_mensual, flow_boton, flow_action_data_json)
+             VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`
           )
           .run(
             templateNombreLimpio,
@@ -815,7 +864,9 @@ app.post('/api/campanas', (req, res) => {
             cliente.id,
             fechaProgramada,
             JSON.stringify([contacto.id]),
-            esRecurrenteMensual
+            esRecurrenteMensual,
+            esFlowBoton,
+            flowActionDataJson
           );
         creadas.push(result.lastInsertRowid);
         if (!futura) {
@@ -829,6 +880,8 @@ app.post('/api/campanas', (req, res) => {
             contactos: [contacto],
             phoneNumberId: cliente.phone_number_id,
             accessToken: cliente.access_token,
+            flowBoton: esFlowBoton,
+            flowActionData,
           });
         }
       }
@@ -842,8 +895,8 @@ app.post('/api/campanas', (req, res) => {
 
     const result = db
       .prepare(
-        `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id, fecha_programada, contacto_ids_json, recurrente_mensual)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id, fecha_programada, contacto_ids_json, recurrente_mensual, flow_boton, flow_action_data_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         templateNombreLimpio,
@@ -856,7 +909,9 @@ app.post('/api/campanas', (req, res) => {
         cliente.id,
         futuraComun ? fechaProgramadaComun : null,
         JSON.stringify(contactos.map((c) => c.id)),
-        esRecurrenteMensual
+        esRecurrenteMensual,
+        esFlowBoton,
+        flowActionDataJson
       );
 
     const campanaId = result.lastInsertRowid;
@@ -873,6 +928,8 @@ app.post('/api/campanas', (req, res) => {
         contactos,
         phoneNumberId: cliente.phone_number_id,
         accessToken: cliente.access_token,
+        flowBoton: esFlowBoton,
+        flowActionData,
       });
     }
 
@@ -1531,6 +1588,31 @@ const clientePorPhoneNumberId = db.prepare('SELECT id FROM clientes WHERE phone_
 // GET /api/mensajes/:id/media (ver más abajo).
 const TIPOS_CON_MEDIA = new Set(['image', 'sticker', 'video', 'audio', 'document']);
 
+/**
+ * Convierte el `nfm_reply` de un WhatsApp Flow completado en texto
+ * legible. `response_json` es un string JSON tipo
+ * { "screen_0_Como_calificas": "5", "flow_token": "573001112233" }.
+ * Se ignoran las claves internas (`flow_token`) y se limpian los
+ * prefijos que Meta agrega al nombre del campo.
+ */
+function formatearRespuestaFlow(nfmReply) {
+  if (!nfmReply) return '[Formulario]';
+  let datos;
+  try {
+    datos = JSON.parse(nfmReply.response_json || '{}');
+  } catch {
+    return '[Formulario recibido]';
+  }
+  const lineas = Object.entries(datos)
+    .filter(([clave]) => clave !== 'flow_token')
+    .map(([clave, valor]) => {
+      const etiqueta = clave.replace(/^screen_\d+_/i, '').replace(/_/g, ' ').trim();
+      const texto = Array.isArray(valor) ? valor.join(', ') : String(valor);
+      return `• ${etiqueta}: ${texto}`;
+    });
+  return lineas.length ? `Formulario:\n${lineas.join('\n')}` : '[Formulario recibido]';
+}
+
 function extraerTextoMensaje(msg) {
   switch (msg.type) {
     case 'text':
@@ -1538,6 +1620,12 @@ function extraerTextoMensaje(msg) {
     case 'button':
       return msg.button?.text || '';
     case 'interactive':
+      // `nfm_reply` = respuesta de un formulario nativo (WhatsApp Flow):
+      // las respuestas vienen en `response_json` (string JSON). Lo
+      // desplegamos como "campo: valor" para que se lean en el chat.
+      if (msg.interactive?.type === 'nfm_reply') {
+        return formatearRespuestaFlow(msg.interactive.nfm_reply);
+      }
       return msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || '[Interactivo]';
     case 'image':
       return msg.image?.caption || '[Imagen]';
