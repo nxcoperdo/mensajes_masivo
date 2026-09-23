@@ -7,6 +7,11 @@ let parametros = []; // [{ tipo: 'fijo'|'nombre'|'variable', valor: '', clave: '
 // contactos/campañas (ver sección EMPRESAS más abajo); estas pestañas de acá
 // arriba (Contactos/Nueva campaña) siempre operan sobre la cuenta logueada.
 let empresas = [];
+let esClienteAdmin = false; // seteado en cargarConfig() — gatea la gestión de números en Webhook
+let misCreditos = null; // { creditos, costos: {MARKETING,UTILITY,AUTHENTICATION}, movimientos } — null si no aplica (admin o cliente con plan)
+let misPlan = null; // { plan, mediosDisponibles, mediosLibres, contactosQueEntran: {MARKETING,UTILITY,AUTHENTICATION} } — null si no aplica
+let planesAdminCache = []; // catálogo de planes, para el panel admin
+let contactoWhatsappAdmin = null; // seteado en cargarConfig() — para el botón "Recargar" del modal de cuota
 
 // ==================== SESIÓN ====================
 // Cualquier fetch que devuelva 401 (sesión vencida o cerrada en otra
@@ -28,26 +33,22 @@ document.getElementById('btnLogout').addEventListener('click', async () => {
 });
 
 // ==================== TEMA (claro/oscuro) ====================
-// Sigue prefers-color-scheme por defecto; el botón permite forzar un
-// modo y lo recuerda en localStorage.
+// El oscuro (marca "Daemon Leads") es el default del panel — el botón
+// permite pasar a claro para quien lo prefiera, y lo recuerda en
+// localStorage.
 
 const THEME_KEY = 'wa-broadcast-theme';
 
 function aplicarTema(theme) {
-  if (theme === 'light' || theme === 'dark') {
-    document.documentElement.setAttribute('data-theme', theme);
-  } else {
-    document.documentElement.removeAttribute('data-theme');
-  }
+  document.documentElement.setAttribute('data-theme', theme === 'light' ? 'light' : 'dark');
 }
 
 function temaActualEfectivo() {
   const guardado = localStorage.getItem(THEME_KEY);
-  if (guardado === 'light' || guardado === 'dark') return guardado;
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  return guardado === 'light' ? 'light' : 'dark';
 }
 
-aplicarTema(localStorage.getItem(THEME_KEY));
+aplicarTema(temaActualEfectivo());
 
 document.getElementById('btnTheme').addEventListener('click', () => {
   const siguiente = temaActualEfectivo() === 'dark' ? 'light' : 'dark';
@@ -65,9 +66,13 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
     document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
     if (btn.dataset.tab === 'campana') {
       document.getElementById('campanaContactosCount').textContent = seleccionados.size;
+      document.getElementById('alertContactosCampana').classList.toggle('alert-empty', seleccionados.size === 0);
+      actualizarEstimadoCreditos();
     }
     if (btn.dataset.tab === 'empresas') {
       cargarEmpresas();
+      cargarPlanesAdminCache().then(() => cargarClientesIndependientes());
+      cargarConfigCreditos();
     }
     if (btn.dataset.tab === 'historial') {
       abrirHistorial();
@@ -80,7 +85,13 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
     }
     if (btn.dataset.tab === 'webhook') {
       cargarConversaciones();
-      cargarNumeros();
+      if (esClienteAdmin) cargarNumeros();
+    }
+    if (btn.dataset.tab === 'plantillas') {
+      cargarMisPlantillas();
+    }
+    if (btn.dataset.tab === 'solicitudes-admin') {
+      cargarSolicitudesAdmin();
     }
   });
 });
@@ -102,21 +113,56 @@ async function cargarConfig() {
     const data = await res.json();
 
     datosFacebookApp = { appId: data.facebookAppId, configId: data.facebookEmbeddedConfigId };
+    configurarBotonNumeroPersonalizado(data.contactoWhatsapp);
+    contactoWhatsappAdmin = data.contactoWhatsapp;
+    esClienteAdmin = Boolean(data.cliente.es_admin);
+
+    // El plan (y los créditos) no dependen de tener un número conectado —
+    // el admin puede asignar el plan antes de asignar el número — así que
+    // se cargan siempre para un cliente independiente, incluso en la rama
+    // de abajo donde el panel completo todavía no se muestra.
+    if (!esClienteAdmin) {
+      await cargarMiPlan();
+      if (!misPlan?.aplica) await cargarMisCreditos();
+      // Ni plan ni saldo de créditos: no puede mandar nada todavía — le
+      // ofrecemos la landing de planes (/planes.html) para que elija uno.
+      const sinNadaConQueEnviar = !misPlan?.aplica && (!misCreditos?.aplica || misCreditos.creditos <= 0);
+      document.getElementById('cardVerPlanes').classList.toggle('hidden', !sinNadaConQueEnviar);
+    }
 
     if (data.cliente.estado !== 'conectado') {
-      document.getElementById('navTabs').classList.add('hidden');
-      document.getElementById('appMain').classList.add('hidden');
-      document.getElementById('pantallaConectar').classList.remove('hidden');
+      // Todavía no tiene número asignado — igual puede pedir plantillas (el
+      // admin le asigna uno de los suyos cuando la aprueba), así que no lo
+      // bloqueamos del todo: dejamos solo la pestaña "Plantillas" visible en
+      // vez de la pantalla completa de "Conectar WhatsApp".
       await prepararBotonConectar('btnConectarWhatsApp', () => window.location.reload());
+      document.getElementById('navTabs').classList.remove('hidden');
+      document.getElementById('appMain').classList.remove('hidden');
+      document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('hidden', b.dataset.tab !== 'plantillas'));
+      document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
+      document.querySelector('[data-tab="plantillas"]').classList.add('active');
+      document.getElementById('tab-plantillas').classList.add('active');
+      document.getElementById('avisoConectarPlantillas').classList.remove('hidden');
+      cargarMisPlantillas();
       return false;
     }
 
-    await prepararBotonConectar('btnAgregarNumero', () => {
-      window.location.reload();
-    });
-
     if (data.cliente.es_admin) {
       document.getElementById('tabBtnEmpresas').classList.remove('hidden');
+      document.getElementById('tabBtnSolicitudes').classList.remove('hidden');
+      document.getElementById('tabBtnLeads').classList.remove('hidden');
+      document.getElementById('cardNumerosAdmin').classList.remove('hidden');
+      document.getElementById('cardConfigWebhook').classList.remove('hidden');
+      await prepararBotonConectar('btnAgregarNumero', () => {
+        window.location.reload();
+      });
+    } else {
+      // Un cliente independiente no gestiona números acá (eso lo hace el
+      // admin desde Empresas > Empresas independientes) — solo ve, de
+      // forma informativa, cuál le quedó asignado.
+      document.getElementById('cardNumeroAsignado').classList.remove('hidden');
+      document.getElementById('miNumeroValor').textContent = data.miNumero?.etiqueta || data.miNumero?.phone_number_id || 'Sin asignar';
     }
 
     if (data.whatsappConfigured) {
@@ -153,6 +199,14 @@ async function cargarConfig() {
     return false;
   }
 }
+
+// Desde "Plantillas" (cuando todavía no hay número asignado), un cliente que
+// ya tiene su propia cuenta de WhatsApp Business puede igual conectarla acá.
+document.getElementById('btnConectarDesdePlantillas')?.addEventListener('click', () => {
+  document.getElementById('navTabs').classList.add('hidden');
+  document.getElementById('appMain').classList.add('hidden');
+  document.getElementById('pantallaConectar').classList.remove('hidden');
+});
 
 // ---- Embedded Signup (popup de Meta para conectar WhatsApp Business) ----
 
@@ -648,6 +702,7 @@ function renderContactos() {
 
 function actualizarContadorSeleccion() {
   document.getElementById('seleccionadosCount').textContent = `${seleccionados.size} seleccionados`;
+  actualizarEstimadoCreditos();
 }
 
 document.getElementById('btnSeleccionarTodos').addEventListener('click', () => {
@@ -724,6 +779,10 @@ document.getElementById('formAgregarContacto').addEventListener('submit', async 
   }
 });
 
+document.getElementById('inputArchivo').addEventListener('change', (e) => {
+  document.getElementById('inputArchivoNombre').textContent = e.target.files[0]?.name || 'Ningún archivo seleccionado';
+});
+
 document.getElementById('formImportar').addEventListener('submit', async (e) => {
   e.preventDefault();
   const archivo = document.getElementById('inputArchivo').files[0];
@@ -751,6 +810,7 @@ document.getElementById('formImportar').addEventListener('submit', async (e) => 
     }
     box.textContent = texto;
     document.getElementById('formImportar').reset();
+    document.getElementById('inputArchivoNombre').textContent = 'Ningún archivo seleccionado';
     (data.contacto_ids || []).forEach((id) => seleccionados.add(id));
     cargarContactos();
     cargarListas();
@@ -802,6 +862,194 @@ function renderEmpresas() {
     btn.addEventListener('click', () => abrirEmpresa(Number(btn.dataset.gestionar)));
   });
 }
+
+/**
+ * Cuentas que se registraron solas (registro.html) — a diferencia de las
+ * "empresas gestionadas" de arriba, tienen su propio login y su propio
+ * panel; acá solo se les asigna uno de los números del admin para que dejen
+ * de estar "pendiente_whatsapp" y puedan mandar campañas con sus plantillas.
+ */
+async function cargarClientesIndependientes() {
+  await cargarNumerosParaSolicitudes();
+  const res = await fetch('/api/admin/clientes-independientes');
+  if (!res.ok) return;
+  const data = await res.json();
+  const tbody = document.getElementById('tablaClientesIndependientes');
+  document.getElementById('totalClientesIndependientes').textContent = data.clientes.length;
+
+  if (data.clientes.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">Todavía no hay cuentas registradas por su cuenta.</div></td></tr>`;
+    return;
+  }
+
+  const opcionesNumero = (seleccionadoId) => `<option value="">— Sin asignar —</option>` +
+    numerosAdminCache.map((n) => `<option value="${n.id}" ${seleccionadoId && n.phone_number_id === seleccionadoId ? 'selected' : ''}>${escapeHtml(n.etiqueta || n.phone_number_id)}</option>`).join('');
+
+  const opcionesPlan = (planId) => `<option value="">— Sin plan (créditos) —</option>` +
+    planesAdminCache.map((p) => `<option value="${p.id}" ${planId === p.id ? 'selected' : ''}>${escapeHtml(p.nombre)} (${p.mensajes_mes}/mes)</option>`).join('');
+
+  tbody.innerHTML = data.clientes.map((c) => `
+    <tr>
+      <td>${escapeHtml(c.nombre_negocio || c.email)}</td>
+      <td><select data-independiente-numero="${c.id}" class="estado-factura-select">${opcionesNumero(c.phone_number_id)}</select></td>
+      <td><span class="estado-pill ${c.whatsapp_conectado ? 'estado-lista_para_enviar' : 'estado-pendiente'}">${c.whatsapp_conectado ? 'Conectada' : 'Pendiente'}</span></td>
+      <td>
+        <select data-independiente-plan="${c.id}" class="estado-factura-select">${opcionesPlan(c.plan_id)}</select>
+        ${c.plan_contactos_disponibles ? `<div class="muted" style="font-size: 11.5px; margin-top: 4px;">Quedan ${c.plan_contactos_disponibles.MARKETING} de ${c.plan_mensajes_mes}/mes</div>` : ''}
+      </td>
+      <td>${c.creditos}</td>
+      <td>
+        <form class="inline-form" data-form-cargar-creditos="${c.id}" style="margin: 0;">
+          <input type="number" step="1" placeholder="± créditos" required style="max-width: 100px" />
+          <input type="text" placeholder="Motivo" required style="max-width: 150px" />
+          <button type="submit" class="btn btn-sm btn-outline">Cargar</button>
+        </form>
+      </td>
+    </tr>
+  `).join('');
+
+  tbody.querySelectorAll('[data-independiente-numero]').forEach((sel) => {
+    sel.addEventListener('change', async (e) => {
+      const res2 = await fetch(`/api/admin/clientes-independientes/${e.target.dataset.independienteNumero}/numero`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ whatsapp_numero_id: e.target.value || null }),
+      });
+      if (!res2.ok) {
+        const errData = await res2.json().catch(() => ({}));
+        alert(errData.error || 'No se pudo asignar el número');
+      }
+      cargarClientesIndependientes();
+    });
+  });
+
+  tbody.querySelectorAll('[data-independiente-plan]').forEach((sel) => {
+    sel.addEventListener('change', async (e) => {
+      const res2 = await fetch(`/api/admin/clientes-independientes/${e.target.dataset.independientePlan}/plan`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan_id: e.target.value || null }),
+      });
+      if (!res2.ok) {
+        const errData = await res2.json().catch(() => ({}));
+        alert(errData.error || 'No se pudo asignar el plan');
+      }
+      cargarClientesIndependientes();
+    });
+  });
+
+  tbody.querySelectorAll('[data-form-cargar-creditos]').forEach((form) => {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const [inputCantidad, inputMotivo] = form.querySelectorAll('input');
+      const res2 = await fetch(`/api/admin/clientes-independientes/${form.dataset.formCargarCreditos}/creditos`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cantidad: Number(inputCantidad.value), motivo: inputMotivo.value.trim() }),
+      });
+      const data2 = await res2.json();
+      if (!res2.ok) {
+        alert(data2.error || 'No se pudo cargar el crédito');
+        return;
+      }
+      cargarClientesIndependientes();
+    });
+  });
+}
+
+async function cargarConfigCreditos() {
+  const res = await fetch('/api/admin/configuracion-creditos');
+  if (!res.ok) return;
+  const { costos } = await res.json();
+  document.getElementById('inputCostoMarketingTexto').value = costos.MARKETING.TEXTO;
+  document.getElementById('inputCostoMarketingImagen').value = costos.MARKETING.IMAGEN;
+  document.getElementById('inputCostoMarketingVideo').value = costos.MARKETING.VIDEO;
+  document.getElementById('inputCostoUtilityTexto').value = costos.UTILITY.TEXTO;
+  document.getElementById('inputCostoUtilityImagen').value = costos.UTILITY.IMAGEN;
+  document.getElementById('inputCostoUtilityVideo').value = costos.UTILITY.VIDEO;
+  document.getElementById('inputCostoAuthentication').value = costos.AUTHENTICATION;
+}
+
+document.getElementById('formConfigCreditos').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const box = document.getElementById('configCreditosResultado');
+  box.classList.remove('hidden', 'error', 'ok');
+  box.textContent = 'Guardando…';
+  try {
+    const res = await fetch('/api/admin/configuracion-creditos', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        MARKETING: {
+          TEXTO: Number(document.getElementById('inputCostoMarketingTexto').value),
+          IMAGEN: Number(document.getElementById('inputCostoMarketingImagen').value),
+          VIDEO: Number(document.getElementById('inputCostoMarketingVideo').value),
+        },
+        UTILITY: {
+          TEXTO: Number(document.getElementById('inputCostoUtilityTexto').value),
+          IMAGEN: Number(document.getElementById('inputCostoUtilityImagen').value),
+          VIDEO: Number(document.getElementById('inputCostoUtilityVideo').value),
+        },
+        AUTHENTICATION: Number(document.getElementById('inputCostoAuthentication').value),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo guardar');
+    box.classList.add('ok');
+    box.textContent = 'Costos actualizados.';
+  } catch (err) {
+    box.classList.add('error');
+    box.textContent = err.message;
+  }
+});
+
+/** Trae el catálogo de planes y lo renderiza en filas editables. Se espera
+ * (`await`) antes de listar las empresas independientes, que necesitan el
+ * catálogo cargado para armar su selector de plan. */
+async function cargarPlanesAdminCache() {
+  const res = await fetch('/api/admin/planes');
+  if (!res.ok) return;
+  const { planes } = await res.json();
+  planesAdminCache = planes;
+
+  const tbody = document.getElementById('tablaPlanesMensuales');
+  tbody.innerHTML = planesAdminCache.map((p) => `
+    <tr data-plan-id="${p.id}">
+      <td><input type="text" value="${escapeHtml(p.nombre)}" data-campo="nombre" style="max-width: 140px" required /></td>
+      <td><input type="number" min="1" step="1" value="${p.mensajes_mes}" data-campo="mensajes_mes" style="max-width: 110px" required /></td>
+      <td><input type="number" min="0" step="1" value="${p.precio_sin_iva}" data-campo="precio_sin_iva" style="max-width: 130px" required /></td>
+    </tr>
+  `).join('');
+}
+
+document.getElementById('btnGuardarPlanes').addEventListener('click', async () => {
+  const box = document.getElementById('configPlanesResultado');
+  box.classList.remove('hidden', 'error', 'ok');
+  box.textContent = 'Guardando…';
+  try {
+    const filas = Array.from(document.querySelectorAll('#tablaPlanesMensuales tr'));
+    const planes = filas.map((fila) => ({
+      id: Number(fila.dataset.planId) || null,
+      nombre: fila.querySelector('[data-campo="nombre"]').value.trim(),
+      mensajes_mes: Number(fila.querySelector('[data-campo="mensajes_mes"]').value),
+      precio_sin_iva: Number(fila.querySelector('[data-campo="precio_sin_iva"]').value),
+    }));
+    const res = await fetch('/api/admin/planes', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planes }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo guardar');
+    box.classList.add('ok');
+    box.textContent = 'Planes actualizados.';
+    await cargarPlanesAdminCache();
+    cargarClientesIndependientes();
+  } catch (err) {
+    box.classList.add('error');
+    box.textContent = err.message;
+  }
+});
 
 document.getElementById('formCrearEmpresa').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -1329,6 +1577,23 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
     alert('El JSON de "Datos para la primera pantalla del formulario" no es válido. Dejalo vacío si no lo necesitás.');
     return;
   }
+
+  // Cliente con plan: si la campaña pide más de lo que queda de cuota, no
+  // se reparte solo con créditos — se avisa y se deja elegir entre
+  // recargar o mandar solo a los que entran (ver mostrarModalCuota).
+  const categoriaCampana = document.getElementById('selectCategoriaCampana').value;
+  if (misPlan?.aplica) {
+    const disponibles = misPlan.contactosQueEntran[categoriaCampana] || 0;
+    if (contacto_ids.length > disponibles) {
+      mostrarModalCuota({
+        disponibles,
+        categoria: categoriaCampana,
+        onEnviarParcial: () => continuarEnvioCampana(contacto_ids.slice(0, disponibles), { template_nombre, idioma, individual, fechaProgramada, flowBoton, flowActionData, categoriaCampana }),
+      });
+      return;
+    }
+  }
+
   const confirmacion = individual
     ? `¿Programar "${template_nombre}" para cada uno de los ${contacto_ids.length} contactos seleccionados, según su propia fecha de recordatorio?`
     : fechaProgramada
@@ -1336,6 +1601,37 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
       : `¿Enviar "${template_nombre}" a ${contacto_ids.length} contactos ahora mismo?`;
   if (!confirm(confirmacion)) return;
 
+  continuarEnvioCampana(contacto_ids, { template_nombre, idioma, individual, fechaProgramada, flowBoton, flowActionData, categoriaCampana });
+});
+
+/** Muestra el modal de "cuota insuficiente" con las opciones Recargar / Enviar mensajes / Cancelar. */
+function mostrarModalCuota({ disponibles, categoria, onEnviarParcial }) {
+  const modal = document.getElementById('modalCuotaPlan');
+  document.getElementById('modalCuotaPlanTexto').textContent =
+    `Te quedan ${disponibles} mensaje(s) disponibles este mes en tu plan. Podés recargar tu plan o enviar solo a esos ${disponibles} contactos.`;
+
+  const btnEnviar = document.getElementById('modalCuotaPlanEnviar');
+  btnEnviar.textContent = disponibles > 0 ? `Enviar a ${disponibles}` : 'Enviar mensajes';
+  btnEnviar.classList.toggle('hidden', disponibles <= 0);
+
+  const linkRecargar = document.getElementById('modalCuotaPlanRecargar');
+  const mensaje = encodeURIComponent(`Hola, quiero recargar/ampliar mi plan de mensajes${misPlan?.plan ? ` (${misPlan.plan.nombre})` : ''}.`);
+  linkRecargar.classList.toggle('hidden', !contactoWhatsappAdmin);
+  linkRecargar.href = contactoWhatsappAdmin ? `https://wa.me/${contactoWhatsappAdmin}?text=${mensaje}` : '#';
+
+  modal.classList.remove('hidden');
+  const cerrar = () => modal.classList.add('hidden');
+  document.getElementById('modalCuotaPlanCancelar').onclick = cerrar;
+  document.getElementById('modalCuotaPlanRecargar').onclick = () => setTimeout(cerrar, 0);
+  btnEnviar.onclick = () => {
+    cerrar();
+    onEnviarParcial();
+  };
+}
+
+/** Arma el FormData y manda la campaña — separado del handler de click para poder reusarlo desde el modal de cuota con una lista de contactos recortada. */
+async function continuarEnvioCampana(contacto_ids, { template_nombre, idioma, individual, fechaProgramada, flowBoton, flowActionData, categoriaCampana }) {
+  const box = document.getElementById('campanaProgreso');
   const btn = document.getElementById('btnEnviarCampana');
   btn.disabled = true;
   btn.classList.add('is-loading');
@@ -1360,12 +1656,28 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
       formData.append('flow_boton', 'true');
       if (flowActionData.valor) formData.append('flow_action_data', flowActionData.valor);
     }
+    if (!esClienteAdmin) {
+      formData.append('categoria_plantilla', categoriaCampana);
+    }
     const archivoImagen = document.getElementById('templateImagen').files[0];
     if (archivoImagen) formData.append('imagen', archivoImagen);
 
     const res = await fetch('/api/campanas', { method: 'POST', body: formData });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Error al crear la campaña');
+    if (!res.ok) {
+      if (data.error === 'cuota_insuficiente') {
+        box.classList.add('hidden');
+        btn.disabled = false;
+        btn.classList.remove('is-loading');
+        mostrarModalCuota({
+          disponibles: data.contactosDisponibles || 0,
+          categoria: categoriaCampana,
+          onEnviarParcial: () => continuarEnvioCampana(contacto_ids.slice(0, data.contactosDisponibles || 0), { template_nombre, idioma, individual, fechaProgramada, flowBoton, flowActionData, categoriaCampana }),
+        });
+        return;
+      }
+      throw new Error(data.error || 'Error al crear la campaña');
+    }
 
     btn.classList.remove('is-loading');
 
@@ -1390,6 +1702,101 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
     btn.disabled = false;
     btn.classList.remove('is-loading');
   }
+}
+
+/** Trae el saldo/costos de créditos del cliente logueado (no-op si es admin o si tiene plan). */
+async function cargarMisCreditos() {
+  const res = await fetch('/api/creditos');
+  const data = await res.json();
+  if (!data.aplica) {
+    misCreditos = null;
+    document.getElementById('bloqueCreditosCampana').classList.add('hidden');
+    return;
+  }
+  misCreditos = data;
+  document.getElementById('bloqueCreditosCampana').classList.remove('hidden');
+  document.getElementById('notaCostoCampana').textContent = 'El costo por mensaje varía si la plantilla lleva imagen o video adjunto (arriba). El estimado es en pesos, sin IVA — el 19% se muestra aparte como referencia, no se descuenta del saldo.';
+  actualizarEstimadoCreditos();
+}
+
+/** Trae la cuota del plan mensual del cliente logueado (no-op si no tiene plan asignado). */
+async function cargarMiPlan() {
+  const res = await fetch('/api/plan');
+  const data = await res.json();
+  if (!data.aplica) {
+    misPlan = null;
+    document.getElementById('cardMiPlan').classList.add('hidden');
+    return;
+  }
+  misPlan = data;
+  document.getElementById('bloqueCreditosCampana').classList.remove('hidden');
+  document.getElementById('notaCostoCampana').textContent = `Plan ${misPlan.plan.nombre}: todos los mensajes valen igual (Marketing, Utilidad, Autenticación, con o sin imagen/video) — cada uno gasta 1 mensaje de la cuota.`;
+  actualizarEstimadoCreditos();
+
+  document.getElementById('cardMiPlan').classList.remove('hidden');
+  document.getElementById('miPlanNombre').textContent = misPlan.plan.nombre;
+  document.getElementById('miPlanAsignados').textContent = `${misPlan.plan.mensajes_mes} mensajes/mes`;
+  const disponibles = misPlan.contactosQueEntran.MARKETING;
+  document.getElementById('miPlanDisponibles').textContent = `${disponibles} mensajes`;
+
+  // Se le acabó la cuota del mes — el botón grande lo manda por WhatsApp a
+  // pedir que le renueven/amplíen el plan (no hay pasarela de pagos
+  // todavía, es 100% manual por el admin).
+  const btnRestaurar = document.getElementById('btnRestaurarPlan');
+  btnRestaurar.classList.toggle('hidden', disponibles > 0 || !contactoWhatsappAdmin);
+  if (contactoWhatsappAdmin) {
+    const mensaje = encodeURIComponent(`Hola, ya usé todos los mensajes de mi plan ${misPlan.plan.nombre} este mes — quiero restaurarlo/ampliarlo.`);
+    btnRestaurar.href = `https://wa.me/${contactoWhatsappAdmin}?text=${mensaje}`;
+  }
+}
+
+/** Mismo criterio que `tipoEncabezado` del server: null = texto plano. */
+const EXTENSIONES_VIDEO_ENCABEZADO = ['.mp4', '.3gp', '.3gpp'];
+function tipoEncabezadoSeleccionado() {
+  const archivo = document.getElementById('templateImagen')?.files?.[0];
+  if (!archivo) return null;
+  const ext = archivo.name.slice(archivo.name.lastIndexOf('.')).toLowerCase();
+  return EXTENSIONES_VIDEO_ENCABEZADO.includes(ext) ? 'video' : 'image';
+}
+
+/** Recalcula el estimado en "Nueva campaña" — en pesos si el cliente usa créditos, en mensajes de cuota si tiene plan. */
+function actualizarEstimadoCreditos() {
+  const texto = document.getElementById('estimadoCreditosCampana');
+  if (!texto) return;
+  const categoria = document.getElementById('selectCategoriaCampana').value;
+
+  if (misPlan?.aplica) {
+    const disponibles = misPlan.contactosQueEntran[categoria] || 0;
+    const alcanza = seleccionados.size <= disponibles;
+    texto.textContent = `Te quedan ${disponibles} mensaje(s) disponibles este mes en el plan ${misPlan.plan.nombre}.${
+      seleccionados.size > 0 ? ` Elegiste ${seleccionados.size} contacto(s)${alcanza ? '' : ' — no alcanza, te va a avisar al enviar'}.` : ''
+    }`;
+    texto.classList.toggle('error-text', seleccionados.size > 0 && !alcanza);
+    return;
+  }
+
+  if (!misCreditos) return;
+  let costoUnitario = 0;
+  if (categoria === 'AUTHENTICATION') {
+    costoUnitario = misCreditos.costos.AUTHENTICATION || 0;
+  } else {
+    const tipo = tipoEncabezadoSeleccionado();
+    const clave = tipo === 'video' ? 'VIDEO' : tipo === 'image' ? 'IMAGEN' : 'TEXTO';
+    costoUnitario = misCreditos.costos[categoria]?.[clave] || 0;
+  }
+  const total = costoUnitario * seleccionados.size;
+  const conIva = Math.round(total * (1 + (misCreditos.ivaPorcentaje || 0)));
+  const restante = misCreditos.creditos - total;
+  texto.textContent = `${seleccionados.size} contacto(s) × $${costoUnitario} = $${total} (+ IVA 19% = $${conIva} si se factura). Saldo actual: $${misCreditos.creditos}${
+    total > 0 ? ` — te quedarían $${restante}${restante < 0 ? ' (no te alcanza)' : ''}` : ''
+  }.`;
+  texto.classList.toggle('error-text', restante < 0);
+}
+
+document.getElementById('selectCategoriaCampana').addEventListener('change', actualizarEstimadoCreditos);
+document.getElementById('templateImagen').addEventListener('change', actualizarEstimadoCreditos);
+document.getElementById('templateImagen').addEventListener('change', (e) => {
+  document.getElementById('templateImagenNombre').textContent = e.target.files[0]?.name || 'Ningún archivo seleccionado';
 });
 
 /** `paramsCliente`: query string opcional (ej: `?cliente_id=5`) cuando se está polleando la campaña de una empresa en vez de la cuenta propia. */
@@ -2492,6 +2899,273 @@ document.getElementById('formResponder').addEventListener('submit', async (e) =>
 });
 
 document.getElementById('btnRefrescarConversaciones').addEventListener('click', () => cargarConversaciones());
+
+// ==================== PLANTILLAS (solicitudes) ====================
+//
+// Cualquier cliente arma acá su plantilla con el mismo formato que pide el
+// creador de plantillas de Meta y la manda como "solicitud" (POST
+// /api/plantillas). El admin ve todas las de todos los clientes en la
+// pestaña "Solicitudes" (GET /api/admin/plantillas) y les va cambiando el
+// estado y asignando un número (PATCH /api/admin/plantillas/:id).
+
+let botonesPlantilla = []; // [{ tipo: 'QUICK_REPLY'|'URL'|'PHONE_NUMBER', texto, url, telefono }]
+let numerosAdminCache = []; // números del admin, para el selector de "Solicitudes"
+
+/** Arma el botón "Escribirnos por WhatsApp" de la tarjeta de número personalizado. */
+function configurarBotonNumeroPersonalizado(contactoWhatsapp) {
+  const link = document.getElementById('linkNumeroPersonalizado');
+  const sinContacto = document.getElementById('sinContactoWhatsapp');
+  if (!contactoWhatsapp) {
+    link.classList.add('hidden');
+    sinContacto.classList.remove('hidden');
+    return;
+  }
+  const mensaje = encodeURIComponent('Hola! Quiero un número de WhatsApp personalizado (con perfil de WhatsApp Business propio) para mis plantillas.');
+  link.href = `https://wa.me/${contactoWhatsapp}?text=${mensaje}`;
+  link.classList.remove('hidden');
+  sinContacto.classList.add('hidden');
+}
+
+const ETIQUETAS_ESTADO_PLANTILLA = {
+  pendiente: 'Pendiente',
+  esperando_confirmacion: 'Esperando confirmación',
+  lista_para_enviar: 'Lista para enviar',
+  rechazada: 'Rechazada',
+  cancelada: 'Cancelada',
+};
+
+function renderBotonesPlantilla() {
+  const cont = document.getElementById('listaBotonesPlantilla');
+  cont.innerHTML = '';
+  botonesPlantilla.forEach((b, idx) => {
+    const row = document.createElement('div');
+    row.className = 'param-row';
+    row.innerHTML = `
+      <span class="param-index">${idx + 1}</span>
+      <select data-idx="${idx}" class="boton-tipo">
+        <option value="QUICK_REPLY" ${b.tipo === 'QUICK_REPLY' ? 'selected' : ''}>Respuesta rápida</option>
+        <option value="URL" ${b.tipo === 'URL' ? 'selected' : ''}>Ir a un sitio (URL)</option>
+        <option value="PHONE_NUMBER" ${b.tipo === 'PHONE_NUMBER' ? 'selected' : ''}>Llamar a un número</option>
+      </select>
+      <input type="text" data-idx="${idx}" class="boton-texto" placeholder="Texto del botón" value="${escapeHtml(b.texto || '')}" maxlength="25" />
+      <input type="text" data-idx="${idx}" class="boton-url" placeholder="https://…" value="${escapeHtml(b.url || '')}" ${b.tipo === 'URL' ? '' : 'disabled'} />
+      <input type="text" data-idx="${idx}" class="boton-telefono" placeholder="Teléfono (ej: 3001234567)" value="${escapeHtml(b.telefono || '')}" ${b.tipo === 'PHONE_NUMBER' ? '' : 'disabled'} />
+      <button type="button" class="btn-danger-sm" data-remove="${idx}" title="Quitar" aria-label="Quitar botón ${idx + 1}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
+      </button>
+    `;
+    cont.appendChild(row);
+  });
+
+  cont.querySelectorAll('.boton-tipo').forEach((sel) => {
+    sel.addEventListener('change', (e) => {
+      botonesPlantilla[Number(e.target.dataset.idx)].tipo = e.target.value;
+      renderBotonesPlantilla();
+    });
+  });
+  cont.querySelectorAll('.boton-texto').forEach((inp) => {
+    inp.addEventListener('input', (e) => { botonesPlantilla[Number(e.target.dataset.idx)].texto = e.target.value; });
+  });
+  cont.querySelectorAll('.boton-url').forEach((inp) => {
+    inp.addEventListener('input', (e) => { botonesPlantilla[Number(e.target.dataset.idx)].url = e.target.value; });
+  });
+  cont.querySelectorAll('.boton-telefono').forEach((inp) => {
+    inp.addEventListener('input', (e) => { botonesPlantilla[Number(e.target.dataset.idx)].telefono = e.target.value; });
+  });
+  cont.querySelectorAll('[data-remove]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      botonesPlantilla.splice(Number(btn.dataset.remove), 1);
+      renderBotonesPlantilla();
+    });
+  });
+}
+
+document.getElementById('btnAgregarBotonPlantilla').addEventListener('click', () => {
+  botonesPlantilla.push({ tipo: 'QUICK_REPLY', texto: '', url: '', telefono: '' });
+  renderBotonesPlantilla();
+});
+
+document.getElementById('selectPlantillaHeaderTipo').addEventListener('change', (e) => {
+  document.getElementById('campoPlantillaHeaderTexto').classList.toggle('hidden', e.target.value !== 'TEXT');
+  document.getElementById('campoPlantillaHeaderMuestra').classList.toggle('hidden', !['IMAGE', 'VIDEO', 'DOCUMENT'].includes(e.target.value));
+});
+
+document.getElementById('inputPlantillaMuestra').addEventListener('change', (e) => {
+  document.getElementById('inputPlantillaMuestraNombre').textContent = e.target.files[0]?.name || 'Ningún archivo seleccionado';
+});
+
+document.getElementById('inputPlantillaNombre').addEventListener('input', (e) => {
+  const limpio = e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '');
+  if (limpio !== e.target.value) e.target.value = limpio;
+});
+
+document.getElementById('inputPlantillaBody').addEventListener('input', (e) => {
+  const contador = document.getElementById('contadorPlantillaBody');
+  contador.textContent = `${e.target.value.length} / 1024`;
+  contador.classList.toggle('error-text', e.target.value.length > 900);
+});
+
+document.getElementById('formSolicitudPlantilla').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const box = document.getElementById('solicitudPlantillaResultado');
+  box.classList.remove('hidden', 'error', 'ok');
+  box.textContent = 'Enviando…';
+
+  const formData = new FormData();
+  formData.append('nombre', document.getElementById('inputPlantillaNombre').value.trim().toLowerCase());
+  formData.append('categoria', document.getElementById('selectPlantillaCategoria').value);
+  formData.append('idioma', document.getElementById('inputPlantillaIdioma').value.trim() || 'es');
+  formData.append('header_tipo', document.getElementById('selectPlantillaHeaderTipo').value);
+  formData.append('header_texto', document.getElementById('inputPlantillaHeaderTexto').value.trim());
+  formData.append('body_texto', document.getElementById('inputPlantillaBody').value.trim());
+  formData.append('footer_texto', document.getElementById('inputPlantillaFooter').value.trim());
+  formData.append('botones_json', JSON.stringify(botonesPlantilla));
+  const muestra = document.getElementById('inputPlantillaMuestra').files[0];
+  if (muestra) formData.append('muestra_encabezado', muestra);
+
+  try {
+    const res = await fetch('/api/plantillas', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo enviar la solicitud');
+
+    box.classList.add('ok');
+    box.textContent = 'Solicitud enviada — te avisamos acá mismo cuando cambie de estado.';
+    e.target.reset();
+    botonesPlantilla = [];
+    renderBotonesPlantilla();
+    document.getElementById('campoPlantillaHeaderTexto').classList.add('hidden');
+    document.getElementById('campoPlantillaHeaderMuestra').classList.add('hidden');
+    document.getElementById('contadorPlantillaBody').textContent = '0 / 1024';
+    document.getElementById('contadorPlantillaBody').classList.remove('error-text');
+    document.getElementById('inputPlantillaMuestraNombre').textContent = 'Ningún archivo seleccionado';
+    cargarMisPlantillas();
+  } catch (err) {
+    box.classList.add('error');
+    box.textContent = err.message;
+  }
+});
+
+function renderResumenPlantilla(p) {
+  const partes = [];
+  if (p.header_tipo !== 'NONE') partes.push(`Encabezado: ${p.header_tipo}`);
+  partes.push(p.body_texto.length > 80 ? `${p.body_texto.slice(0, 80)}…` : p.body_texto);
+  if (p.botones?.length) partes.push(`${p.botones.length} botón(es)`);
+  let resumen = escapeHtml(partes.join(' — '));
+  if (p.header_media_url) {
+    resumen += ` <a href="${escapeHtml(p.header_media_url)}" target="_blank" rel="noopener">📎 ver muestra</a>`;
+  }
+  return resumen;
+}
+
+async function cargarMisPlantillas() {
+  const res = await fetch('/api/plantillas');
+  const data = await res.json();
+  const tbody = document.getElementById('tablaMisPlantillas');
+  document.getElementById('totalMisPlantillas').textContent = data.solicitudes.length;
+
+  tbody.innerHTML = data.solicitudes.map((p) => `
+    <tr>
+      <td>${escapeHtml(p.nombre)}</td>
+      <td>${escapeHtml(p.categoria)}</td>
+      <td>${escapeHtml(p.numero_asignado || 'Sin asignar')}</td>
+      <td><span class="estado-pill estado-${p.estado}">${ETIQUETAS_ESTADO_PLANTILLA[p.estado] || p.estado}</span></td>
+      <td>${new Date(p.creado_en).toLocaleDateString('es-CO')}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="5" class="muted">Todavía no pediste ninguna plantilla.</td></tr>';
+}
+
+/** Números ya conectados por el admin — misma fuente que la pestaña Webhook. */
+async function cargarNumerosParaSolicitudes() {
+  const res = await fetch('/api/whatsapp/numeros');
+  const data = await res.json();
+  numerosAdminCache = data.numeros;
+}
+
+async function cargarSolicitudesAdmin() {
+  await cargarNumerosParaSolicitudes();
+  const estado = document.getElementById('filtroEstadoSolicitudes').value;
+  const url = estado ? `/api/admin/plantillas?estado=${encodeURIComponent(estado)}` : '/api/admin/plantillas';
+  const res = await fetch(url);
+  const data = await res.json();
+  const tbody = document.getElementById('tablaSolicitudesAdmin');
+  document.getElementById('totalSolicitudesAdmin').textContent = data.solicitudes.length;
+
+  const opcionesNumero = (seleccionadoId) => `<option value="">— Sin asignar —</option>` +
+    numerosAdminCache.map((n) => `<option value="${n.id}" ${Number(seleccionadoId) === n.id ? 'selected' : ''}>${escapeHtml(n.etiqueta || n.phone_number_id)}</option>`).join('');
+
+  const opcionesEstado = (actual) => Object.entries(ETIQUETAS_ESTADO_PLANTILLA)
+    .map(([valor, etiqueta]) => `<option value="${valor}" ${valor === actual ? 'selected' : ''}>${etiqueta}</option>`)
+    .join('');
+
+  tbody.innerHTML = data.solicitudes.map((p) => `
+    <tr>
+      <td>${escapeHtml(p.cliente_nombre)}</td>
+      <td>${escapeHtml(p.nombre)}</td>
+      <td>${escapeHtml(p.categoria)}</td>
+      <td>${renderResumenPlantilla(p)}</td>
+      <td><select data-plantilla-numero="${p.id}" class="estado-factura-select">${opcionesNumero(p.whatsapp_numero_id)}</select></td>
+      <td><select data-plantilla-estado="${p.id}" class="estado-factura-select">${opcionesEstado(p.estado)}</select></td>
+      <td><input type="text" data-plantilla-nota="${p.id}" value="${escapeHtml(p.nota_admin || '')}" placeholder="Nota interna…" /></td>
+      <td><button type="button" class="btn btn-sm btn-outline" data-plantilla-ver="${p.id}">Ver JSON</button></td>
+    </tr>
+  `).join('') || '<tr><td colspan="8" class="muted">No hay solicitudes con ese filtro.</td></tr>';
+
+  tbody.querySelectorAll('[data-plantilla-estado]').forEach((sel) => {
+    sel.addEventListener('change', (e) => actualizarSolicitudAdmin(e.target.dataset.plantillaEstado, { estado: e.target.value }));
+  });
+  tbody.querySelectorAll('[data-plantilla-numero]').forEach((sel) => {
+    sel.addEventListener('change', (e) => actualizarSolicitudAdmin(e.target.dataset.plantillaNumero, { whatsapp_numero_id: e.target.value || null }));
+  });
+  tbody.querySelectorAll('[data-plantilla-nota]').forEach((inp) => {
+    inp.addEventListener('blur', (e) => actualizarSolicitudAdmin(e.target.dataset.plantillaNota, { nota_admin: e.target.value }));
+  });
+  tbody.querySelectorAll('[data-plantilla-ver]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const solicitud = data.solicitudes.find((p) => p.id === Number(btn.dataset.plantillaVer));
+      document.getElementById('jsonSolicitudAdmin').textContent = JSON.stringify(solicitud.componentes_meta, null, 2);
+
+      const muestraCont = document.getElementById('muestraSolicitudAdmin');
+      if (solicitud.header_media_url) {
+        const url = solicitud.header_media_url;
+        let visor;
+        if (solicitud.header_tipo === 'VIDEO') {
+          visor = `<video src="${url}" controls style="max-width: 320px; border-radius: 8px;"></video>`;
+        } else if (solicitud.header_tipo === 'IMAGE') {
+          visor = `<img src="${url}" alt="Muestra de encabezado" style="max-width: 320px; border-radius: 8px;" />`;
+        } else {
+          visor = `<a href="${url}" target="_blank" rel="noopener" class="btn btn-sm btn-outline">Descargar documento adjunto</a>`;
+        }
+        muestraCont.innerHTML = `<h3>Muestra del encabezado</h3>${visor}`;
+        muestraCont.classList.remove('hidden');
+      } else {
+        muestraCont.innerHTML = '';
+        muestraCont.classList.add('hidden');
+      }
+
+      document.getElementById('detalleSolicitudAdmin').classList.remove('hidden');
+    });
+  });
+}
+
+async function actualizarSolicitudAdmin(id, cambios) {
+  const res = await fetch(`/api/admin/plantillas/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cambios),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'No se pudo actualizar la solicitud');
+  }
+  cargarSolicitudesAdmin();
+}
+
+document.getElementById('filtroEstadoSolicitudes').addEventListener('change', () => cargarSolicitudesAdmin());
+document.getElementById('btnCerrarDetalleSolicitud').addEventListener('click', () => {
+  document.getElementById('detalleSolicitudAdmin').classList.add('hidden');
+});
+
+renderBotonesPlantilla();
 
 // ==================== INIT ====================
 

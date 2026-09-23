@@ -80,6 +80,8 @@ async function revisarProgramadas() {
         accessToken: cliente.access_token,
         flowBoton: !!campana.flow_boton,
         flowActionData,
+        clienteId: campana.cliente_id,
+        categoriaPlantilla: campana.categoria_plantilla,
       });
     } catch (err) {
       console.error(`[scheduler] error procesando campaña ${id}:`, err.message);

@@ -82,9 +82,18 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>
       Encuestas
     </button>
-    <button class="tab-btn" data-tab="leads">
+    <button class="tab-btn hidden" data-tab="leads" id="tabBtnLeads">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
       Leads
+    </button>
+    <button class="tab-btn" data-tab="plantillas">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6" /><path d="M9 13h6M9 17h6M9 9h1" /></svg>
+      Plantillas
+    </button>
+    <button class="tab-btn hidden" data-tab="solicitudes-admin" id="tabBtnSolicitudes">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>
+      Solicitudes
+      <span id="solicitudesBadgeTab" class="tab-badge hidden">0</span>
     </button>
     <button class="tab-btn" data-tab="webhook">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" /></svg>
@@ -130,6 +139,86 @@
               <tbody id="tablaEmpresas"></tbody>
             </table>
           </div>
+        </div>
+
+        <div class="card">
+          <h2>Empresas independientes (<span id="totalClientesIndependientes">0</span>)</h2>
+          <p class="muted">
+            Cuentas que se registraron solas desde la pantalla de registro — manejan sus propios contactos,
+            campañas y plantillas desde su panel. Acá solo les asignás uno de tus números conectados; sin eso
+            no pueden mandar campañas aunque ya tengan una plantilla "lista para enviar".
+          </p>
+          <div class="table-wrap">
+            <table class="tabla">
+              <thead>
+                <tr>
+                  <th>Cuenta</th>
+                  <th>Número asignado</th>
+                  <th>Estado</th>
+                  <th>Plan mensual</th>
+                  <th>Créditos</th>
+                  <th>Cargar créditos</th>
+                </tr>
+              </thead>
+              <tbody id="tablaClientesIndependientes"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Costo en créditos por mensaje (COP, sin IVA)</h2>
+          <p class="muted">1 crédito = 1 peso. Cuánto descuenta cada mensaje efectivamente enviado, según la categoría de la plantilla y si lleva texto, imagen o video — es global, aplica a todos los clientes independientes.</p>
+          <form id="formConfigCreditos" class="inline-form">
+            <div class="field">
+              <label for="inputCostoMarketingTexto">Marketing · texto</label>
+              <input type="number" id="inputCostoMarketingTexto" min="0" step="1" required />
+            </div>
+            <div class="field">
+              <label for="inputCostoMarketingImagen">Marketing · imagen</label>
+              <input type="number" id="inputCostoMarketingImagen" min="0" step="1" required />
+            </div>
+            <div class="field">
+              <label for="inputCostoMarketingVideo">Marketing · video</label>
+              <input type="number" id="inputCostoMarketingVideo" min="0" step="1" required />
+            </div>
+            <div class="field">
+              <label for="inputCostoUtilityTexto">Utilidad · texto</label>
+              <input type="number" id="inputCostoUtilityTexto" min="0" step="1" required />
+            </div>
+            <div class="field">
+              <label for="inputCostoUtilityImagen">Utilidad · imagen</label>
+              <input type="number" id="inputCostoUtilityImagen" min="0" step="1" required />
+            </div>
+            <div class="field">
+              <label for="inputCostoUtilityVideo">Utilidad · video</label>
+              <input type="number" id="inputCostoUtilityVideo" min="0" step="1" required />
+            </div>
+            <div class="field">
+              <label for="inputCostoAuthentication">Autenticación</label>
+              <input type="number" id="inputCostoAuthentication" min="0" step="1" required />
+            </div>
+            <button type="submit" class="btn btn-outline">Guardar</button>
+          </form>
+          <div id="configCreditosResultado" class="result-box hidden"></div>
+        </div>
+
+        <div class="card">
+          <h2>Planes mensuales</h2>
+          <p class="muted">Cuota fija de mensajes/mes a precio plano (sin IVA) — imagen y video cuentan igual que texto. Alternativa a los créditos sueltos: un cliente con plan asignado deja de usar créditos hasta que se lo desasignes.</p>
+          <div class="table-wrap">
+            <table class="tabla">
+              <thead>
+                <tr>
+                  <th>Plan</th>
+                  <th>Mensajes/mes</th>
+                  <th>Precio sin IVA</th>
+                </tr>
+              </thead>
+              <tbody id="tablaPlanesMensuales"></tbody>
+            </table>
+          </div>
+          <button type="button" id="btnGuardarPlanes" class="btn btn-outline">Guardar planes</button>
+          <div id="configPlanesResultado" class="result-box hidden"></div>
         </div>
       </div>
 
@@ -315,8 +404,11 @@
         <p class="muted">Columnas esperadas: <code>telefono</code> y <code>nombre</code> (podés usar <code>phone</code>/<code>numero</code>/<code>name</code> también). El teléfono se normaliza solo (agrega el 57 de Colombia si falta). Formatos aceptados: <code>.csv</code>, <code>.xlsx</code>, <code>.xls</code>.</p>
         <p class="muted">Cualquier otra columna (ej: <code>fecha_cita</code>, <code>hora</code>, <code>servicio</code>) queda disponible como variable de plantilla al armar la campaña. Una columna <code>fecha_envio</code> programa el recordatorio individual de ese contacto (pestaña "Nueva campaña", opción "Fecha individual por contacto").</p>
         <form id="formImportar">
-          <label for="inputArchivo" class="sr-only">Archivo de contactos</label>
-          <input type="file" name="archivo" id="inputArchivo" accept=".csv,.xlsx,.xls" required />
+          <div class="file-picker">
+            <label for="inputArchivo" class="file-picker-label">Seleccionar archivo</label>
+            <span class="file-picker-name" id="inputArchivoNombre">Ningún archivo seleccionado</span>
+          </div>
+          <input type="file" name="archivo" id="inputArchivo" accept=".csv,.xlsx,.xls" required class="sr-only" />
           <div class="send-bar" style="margin-top: 14px; padding-top: 0; border-top: none;">
             <button type="submit" class="btn btn-primary">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M17 8l-5-5-5 5" /><path d="M12 3v12" /></svg>
@@ -413,18 +505,37 @@
 
     <!-- ===================== TAB: NUEVA CAMPAÑA ===================== -->
     <section id="tab-campana" class="tab-panel">
+      <div id="alertContactosCampana" class="alert-box">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
+        <span><strong id="campanaContactosCount">0</strong> contactos seleccionados en la pestaña "Contactos". Si no seleccionaste ninguno, andá a esa pestaña primero.</span>
+      </div>
+
       <div class="card">
-        <h2>Configurar envío</h2>
-        <p class="muted"><strong id="campanaContactosCount">0</strong> contactos seleccionados en la pestaña "Contactos". Si no seleccionaste ninguno, andá a esa pestaña primero.</p>
+        <div class="section-header">
+          <span class="section-header-badge">1</span>
+          <div>
+            <h3>Plantilla de WhatsApp</h3>
+            <p>Usá el nombre exacto tal cual está aprobado en Meta.</p>
+          </div>
+        </div>
 
-        <label for="templateNombre">Nombre exacto de la plantilla (tal cual está aprobada en Meta)</label>
-        <input type="text" id="templateNombre" placeholder="ej: puntos_nuevos_premios" autocomplete="off" />
+        <div class="field-grid-2">
+          <div>
+            <label for="templateNombre">Nombre de la plantilla</label>
+            <input type="text" id="templateNombre" placeholder="ej: puntos_nuevos_premios" autocomplete="off" />
+          </div>
+          <div>
+            <label for="templateIdioma">Idioma</label>
+            <input type="text" id="templateIdioma" value="es" autocomplete="off" />
+          </div>
+        </div>
 
-        <label for="templateIdioma">Idioma</label>
-        <input type="text" id="templateIdioma" value="es" style="max-width: 120px" autocomplete="off" />
-
-        <label for="templateImagen">Media del encabezado (solo si la plantilla lo tiene — imagen .jpg/.png máx 5MB o video .mp4 máx 16MB)</label>
-        <input type="file" id="templateImagen" accept=".jpg,.jpeg,.png,.mp4,.3gp,.3gpp" />
+        <label for="templateImagen" style="margin-top: 14px;">Media del encabezado <span class="muted" style="font-weight: 400;">(solo si la plantilla lo tiene — imagen .jpg/.png máx 5MB o video .mp4 máx 16MB)</span></label>
+        <div class="file-picker">
+          <label for="templateImagen" class="file-picker-label">Seleccionar archivo</label>
+          <span class="file-picker-name" id="templateImagenNombre">Ningún archivo seleccionado</span>
+        </div>
+        <input type="file" id="templateImagen" accept=".jpg,.jpeg,.png,.mp4,.3gp,.3gpp" class="sr-only" />
 
         <label class="checkbox-inline">
           <input type="checkbox" id="checkFlowBoton" />
@@ -434,17 +545,61 @@
           <label for="inputFlowActionData">Datos para la primera pantalla del formulario (JSON — opcional, casi nunca hace falta)</label>
           <input type="text" id="inputFlowActionData" placeholder='ej: {"nombre":"Ana"}' autocomplete="off" />
         </div>
+      </div>
 
-        <h3>Parámetros de la plantilla ({{1}}, {{2}}, …)</h3>
-        <p class="muted">Agregá uno por cada <code>{{N}}</code> que tenga tu plantilla, en orden. "Nombre del contacto" personaliza automáticamente por persona; "Variable del contacto" toma un dato cargado por CSV (ej: <code>fecha_cita</code>).</p>
-        <div id="parametrosLista"></div>
-        <button id="btnAgregarParametro" type="button" class="btn btn-sm btn-outline">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+      <div class="card">
+        <div class="section-header">
+          <span class="section-header-badge">2</span>
+          <div>
+            <h3>Parámetros de la plantilla ({{1}}, {{2}}, …)</h3>
+            <p>Agregá uno por cada <code>{{N}}</code> que tenga tu plantilla, en orden.</p>
+          </div>
+        </div>
+
+        <div class="info-note">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>
+          <p><strong>"Nombre del contacto"</strong> personaliza automáticamente por persona. <strong>"Variable del contacto"</strong> toma un dato cargado por CSV (ej: <code>fecha_cita</code>).</p>
+        </div>
+
+        <div id="parametrosLista" style="margin-top: 14px;"></div>
+        <button id="btnAgregarParametro" type="button" class="btn-dashed">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
           Agregar parámetro
         </button>
+      </div>
 
-        <h3>Programación (opcional)</h3>
-        <p class="muted">Sin elegir nada, la campaña se manda de inmediato.</p>
+      <div id="bloqueCreditosCampana" class="card hidden">
+        <div class="section-header">
+          <span class="section-header-badge">3</span>
+          <div>
+            <h3>Créditos / plan</h3>
+          </div>
+        </div>
+
+        <label for="selectCategoriaCampana">Categoría de la plantilla <span class="muted" style="font-weight: 400;">(define el costo)</span></label>
+        <select id="selectCategoriaCampana">
+          <option value="MARKETING">Marketing</option>
+          <option value="UTILITY">Utilidad (transaccional)</option>
+          <option value="AUTHENTICATION">Autenticación (códigos)</option>
+        </select>
+
+        <div class="info-note">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>
+          <p id="notaCostoCampana">El costo por mensaje varía si la plantilla lleva imagen o video adjunto (arriba). El estimado es en pesos, sin IVA — el 19% se muestra aparte como referencia, no se descuenta del saldo.</p>
+        </div>
+
+        <div class="costo-box" id="estimadoCreditosCampana">Elegí una categoría para ver el costo estimado.</div>
+      </div>
+
+      <div class="card">
+        <div class="section-header">
+          <span class="section-header-badge">4</span>
+          <div>
+            <h3>Programación</h3>
+            <p>Sin elegir nada, la campaña se manda de inmediato.</p>
+          </div>
+        </div>
+
         <label class="checkbox-inline">
           <input type="checkbox" id="checkFechaIndividual" />
           Fecha individual por contacto (usa el <code>fecha_envio</code> propio de cada contacto, cargado por CSV)
@@ -457,15 +612,19 @@
           <input type="checkbox" id="checkRecurrenteMensual" />
           Repetir cada mes (mismo día — ej: recordatorio de una cita mensual)
         </label>
-
-        <div class="send-bar">
-          <button id="btnEnviarCampana" class="btn btn-primary btn-lg">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg>
-            Enviar campaña
-          </button>
-        </div>
-        <div id="campanaProgreso" class="result-box hidden"></div>
       </div>
+
+      <div class="card send-bar-card">
+        <div>
+          <h4>¿Todo listo?</h4>
+          <p>Revisá los contactos seleccionados antes de enviar.</p>
+        </div>
+        <button id="btnEnviarCampana" class="btn btn-primary btn-lg">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg>
+          Enviar campaña
+        </button>
+      </div>
+      <div id="campanaProgreso" class="result-box hidden"></div>
     </section>
 
     <!-- ===================== TAB: HISTORIAL ===================== -->
@@ -683,6 +842,206 @@
       </div>
     </section>
 
+    <!-- ===================== TAB: PLANTILLAS (pedido a Code Repair Tech) ===================== -->
+    <section id="tab-plantillas" class="tab-panel">
+      <div id="cardMiPlan" class="card hidden">
+        <h2>Tu plan</h2>
+        <p class="muted">Cuota fija de mensajes/mes — se resetea cada mes en el aniversario de cuando te lo activaron. Imagen y video cuentan igual que texto.</p>
+        <div class="webhook-info-row">
+          <span class="webhook-info-label">Plan</span>
+          <code id="miPlanNombre">—</code>
+        </div>
+        <div class="webhook-info-row">
+          <span class="webhook-info-label">Asignados este mes</span>
+          <code id="miPlanAsignados">—</code>
+        </div>
+        <div class="webhook-info-row">
+          <span class="webhook-info-label">Disponibles ahora</span>
+          <code id="miPlanDisponibles">—</code>
+        </div>
+        <a id="btnRestaurarPlan" href="#" target="_blank" rel="noopener" class="btn-restaurar-plan hidden">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" /></svg>
+          Restaurar plan
+        </a>
+      </div>
+
+      <div id="cardVerPlanes" class="card hidden numero-personalizado-banner">
+        <div class="numero-personalizado-icono">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18M8 4v6" /></svg>
+        </div>
+        <div class="numero-personalizado-texto">
+          <h3>Todavía no tenés un plan activo</h3>
+          <p class="muted">Sin plan (ni créditos cargados) no podés mandar campañas. Elegí el que más se ajuste a tu volumen y escribinos para activarlo.</p>
+        </div>
+        <a href="/planes.html" target="_blank" rel="noopener" class="numero-personalizado-cta">Ver planes →</a>
+      </div>
+
+      <div id="avisoConectarPlantillas" class="card hidden">
+        <p class="muted">
+          Todavía no tenés un número de WhatsApp asignado. Podés pedir tus plantillas igual — te asignamos un
+          número apenas la aprobemos. Si ya tenés tu propia cuenta de WhatsApp Business,
+          <button type="button" id="btnConectarDesdePlantillas" class="btn btn-sm btn-outline" style="margin-left: 4px;">conectala vos mismo</button>.
+        </p>
+      </div>
+
+      <div class="card numero-personalizado-banner">
+        <div class="numero-personalizado-icono">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38a9.9 9.9 0 0 0 4.74 1.21h.01c5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.86 9.86 0 0 0 12.04 2Zm5.8 14.16c-.24.68-1.4 1.3-1.94 1.38-.5.08-1.12.11-1.81-.11-.42-.13-.95-.31-1.64-.6-2.88-1.24-4.76-4.14-4.9-4.33-.14-.19-1.17-1.56-1.17-2.98 0-1.42.75-2.11 1.01-2.4.27-.29.58-.36.78-.36h.56c.18 0 .42-.07.66.5.24.58.83 2 .9 2.14.07.14.12.31.02.5-.09.19-.14.31-.28.47-.14.16-.29.36-.42.48-.14.14-.28.29-.12.57.16.28.71 1.17 1.53 1.9 1.05.94 1.94 1.23 2.22 1.37.28.14.44.12.6-.07.16-.19.68-.79.86-1.06.18-.28.36-.23.6-.14.24.09 1.55.73 1.82.86.27.14.44.2.51.32.07.12.07.68-.17 1.36Z"/></svg>
+        </div>
+        <div class="numero-personalizado-texto">
+          <h3>¿Querés un número de WhatsApp personalizado?</h3>
+          <p class="muted">
+            Un número personalizado es una línea exclusiva para tu negocio, con su propio perfil de WhatsApp
+            Business completo: foto, nombre, categoría, descripción, dirección y horario de atención — no
+            compartís número con otras empresas.
+          </p>
+          <p id="sinContactoWhatsapp" class="muted hidden" style="font-size: 12px;">Todavía no configuramos un número de contacto — escribinos por otro medio mientras tanto.</p>
+        </div>
+        <a id="linkNumeroPersonalizado" href="#" target="_blank" rel="noopener" class="btn numero-personalizado-cta hidden">
+          Escribinos →
+        </a>
+      </div>
+
+      <div class="card">
+        <h2>Nueva solicitud de plantilla</h2>
+        <p class="muted">
+          Armala igual que en el creador de plantillas de Meta. La mandamos nosotros a Meta y te avisamos acá
+          mismo el estado (pendiente, esperando confirmación, lista para enviar, etc.).
+        </p>
+        <form id="formSolicitudPlantilla">
+          <label for="inputPlantillaNombre">Nombre de la plantilla <span class="muted" style="font-weight: 400;">(minúsculas, sin espacios ni tildes — ej: <code>recordatorio_cita</code>)</span></label>
+          <input type="text" id="inputPlantillaNombre" pattern="[a-z0-9_]+" placeholder="ej: promo_septiembre" autocomplete="off" required />
+
+          <div class="field-grid-2">
+            <div>
+              <label for="selectPlantillaCategoria">Categoría</label>
+              <select id="selectPlantillaCategoria" required>
+                <option value="MARKETING">Marketing</option>
+                <option value="UTILITY">Utilidad (transaccional)</option>
+                <option value="AUTHENTICATION">Autenticación (códigos)</option>
+              </select>
+            </div>
+            <div>
+              <label for="inputPlantillaIdioma">Idioma</label>
+              <input type="text" id="inputPlantillaIdioma" value="es" autocomplete="off" />
+            </div>
+          </div>
+
+          <label for="selectPlantillaHeaderTipo">Encabezado</label>
+          <select id="selectPlantillaHeaderTipo">
+            <option value="NONE">Ninguno</option>
+            <option value="TEXT">Texto</option>
+            <option value="IMAGE">Imagen</option>
+            <option value="VIDEO">Video</option>
+            <option value="DOCUMENT">Documento</option>
+          </select>
+
+          <div id="campoPlantillaHeaderTexto" class="hidden">
+            <label for="inputPlantillaHeaderTexto">Texto del encabezado (máx. 60 caracteres)</label>
+            <input type="text" id="inputPlantillaHeaderTexto" maxlength="60" autocomplete="off" />
+          </div>
+
+          <div id="campoPlantillaHeaderMuestra" class="hidden">
+            <label for="inputPlantillaMuestra">Archivo de muestra (imagen .jpg/.png, video .mp4/.3gp, o documento)</label>
+            <div class="file-picker">
+              <label for="inputPlantillaMuestra" class="file-picker-label">Seleccionar archivo</label>
+              <span class="file-picker-name" id="inputPlantillaMuestraNombre">Ningún archivo seleccionado</span>
+            </div>
+            <input type="file" id="inputPlantillaMuestra" accept=".jpg,.jpeg,.png,.mp4,.3gp,.3gpp,.pdf" class="sr-only" />
+          </div>
+
+          <label for="inputPlantillaBody">Cuerpo del mensaje <span class="muted" style="font-weight: 400;">(usá <code>{{1}}</code>, <code>{{2}}</code>… para variables)</span></label>
+          <textarea id="inputPlantillaBody" maxlength="1024" rows="4" required></textarea>
+          <p class="muted contador-caracteres" id="contadorPlantillaBody">0 / 1024</p>
+
+          <label for="inputPlantillaFooter">Pie (opcional, máx. 60 caracteres)</label>
+          <input type="text" id="inputPlantillaFooter" maxlength="60" autocomplete="off" />
+
+          <h3>Botones (opcional)</h3>
+          <p class="muted">Hasta 3 de respuesta rápida, 2 de URL y 1 de llamada telefónica.</p>
+          <div id="listaBotonesPlantilla"></div>
+          <button id="btnAgregarBotonPlantilla" type="button" class="btn-dashed">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+            Agregar botón
+          </button>
+
+          <div class="send-bar">
+            <button type="submit" class="btn btn-primary btn-lg">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg>
+              Enviar solicitud
+            </button>
+          </div>
+        </form>
+        <div id="solicitudPlantillaResultado" class="result-box hidden"></div>
+      </div>
+
+      <div class="card">
+        <h2>Mis solicitudes (<span id="totalMisPlantillas">0</span>)</h2>
+        <div class="table-wrap">
+          <table class="tabla">
+            <thead>
+              <tr>
+                <th>Nombre</th>
+                <th>Categoría</th>
+                <th>Número asignado</th>
+                <th>Estado</th>
+                <th>Fecha</th>
+              </tr>
+            </thead>
+            <tbody id="tablaMisPlantillas"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== TAB: SOLICITUDES (admin — todas las plantillas pedidas) ===================== -->
+    <section id="tab-solicitudes-admin" class="tab-panel">
+      <div class="card">
+        <div class="card-header">
+          <h2>Solicitudes de plantillas (<span id="totalSolicitudesAdmin">0</span>)</h2>
+          <div class="header-actions">
+            <label for="filtroEstadoSolicitudes" class="sr-only">Filtrar por estado</label>
+            <select id="filtroEstadoSolicitudes">
+              <option value="">Todos los estados</option>
+              <option value="pendiente">Pendiente</option>
+              <option value="esperando_confirmacion">Esperando confirmación</option>
+              <option value="lista_para_enviar">Lista para enviar</option>
+              <option value="rechazada">Rechazada</option>
+              <option value="cancelada">Cancelada</option>
+            </select>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="tabla">
+            <thead>
+              <tr>
+                <th>Cliente</th>
+                <th>Nombre</th>
+                <th>Categoría</th>
+                <th>Resumen</th>
+                <th>Número asignado</th>
+                <th>Estado</th>
+                <th>Nota interna</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="tablaSolicitudesAdmin"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="detalleSolicitudAdmin" class="card hidden">
+        <button type="button" id="btnCerrarDetalleSolicitud" class="btn btn-sm btn-outline">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+          Cerrar
+        </button>
+        <div id="muestraSolicitudAdmin" class="hidden"></div>
+        <h2 style="margin-top: 14px;">Formato para recrear en Meta</h2>
+        <p class="muted">Copiá este JSON como referencia al crear la plantilla en el Administrador de Meta (Components).</p>
+        <pre id="jsonSolicitudAdmin" class="result-box json-preview"></pre>
+      </div>
+    </section>
+
     <!-- ===================== TAB: LEADS (PROSPECCIÓN B2B) ===================== -->
     <section id="tab-leads" class="tab-panel">
       <div class="card">
@@ -745,7 +1104,7 @@
 
     <!-- ===================== TAB: WEBHOOK (ESTADOS Y CONVERSACIONES) ===================== -->
     <section id="tab-webhook" class="tab-panel">
-      <div class="card">
+      <div id="cardConfigWebhook" class="card hidden">
         <h2>Configuración del webhook</h2>
         <p class="muted">
           Configurá esta URL en Meta (tu app &gt; WhatsApp &gt; Configuration &gt; Webhook) para recibir
@@ -767,7 +1126,7 @@
         </div>
       </div>
 
-      <div class="card">
+      <div id="cardNumerosAdmin" class="card hidden">
         <div class="card-header">
           <h2>Números de WhatsApp conectados</h2>
           <button type="button" id="btnAgregarNumero" class="btn btn-sm btn-outline">+ Agregar número</button>
@@ -793,6 +1152,18 @@
             <button type="submit" class="btn btn-sm btn-outline">Agregar</button>
           </form>
         </details>
+      </div>
+
+      <div id="cardNumeroAsignado" class="card hidden">
+        <h2>Tu número de WhatsApp</h2>
+        <p class="muted">
+          Este es el número desde el que mandás campañas y respondés chats. Lo asigna Code Repair Tech — si
+          necesitás cambiarlo, escribinos (pestaña "Plantillas", "¿Querés un número personalizado?").
+        </p>
+        <div id="miNumeroInfo" class="webhook-info-row">
+          <span class="webhook-info-label">Número asignado</span>
+          <code id="miNumeroValor">—</code>
+        </div>
       </div>
 
       <div class="card webhook-chat-card">
@@ -842,6 +1213,18 @@
     </p>
     <p class="footer-copy">© <span id="footerYear"></span> Code Repair Tech Inc.</p>
   </footer>
+
+  <div id="modalCuotaPlan" class="modal-overlay hidden">
+    <div class="modal-card card">
+      <h3 id="modalCuotaPlanTitulo">Cuota insuficiente</h3>
+      <p id="modalCuotaPlanTexto" class="muted"></p>
+      <div class="modal-acciones">
+        <a id="modalCuotaPlanRecargar" href="#" target="_blank" rel="noopener" class="btn btn-outline">Recargar</a>
+        <button type="button" id="modalCuotaPlanEnviar" class="btn btn-primary">Enviar mensajes</button>
+        <button type="button" id="modalCuotaPlanCancelar" class="btn btn-sm btn-outline">Cancelar</button>
+      </div>
+    </div>
+  </div>
 
   <script>document.getElementById('footerYear').textContent = new Date().getFullYear();</script>
   <script src="/app.js"></script>

@@ -177,6 +177,35 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_respuestas_flow_cliente ON respuestas_flow(cliente_id, campana_id);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_respuestas_flow_wamid ON respuestas_flow(wa_message_id);
+
+  -- Pedido de plantilla que un cliente arma desde el panel (formato calcado del
+  -- creador de plantillas de Meta: categoría, encabezado, cuerpo, pie, botones)
+  -- y que le llega al admin para que la cree a mano en el Administrador de Meta.
+  -- El admin va cambiando el estado a medida que la gestiona y le asigna uno
+  -- de SUS números conectados (whatsapp_numeros) — ver server.js, sección
+  -- "PLANTILLAS (solicitudes)".
+  CREATE TABLE IF NOT EXISTS plantillas_solicitudes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cliente_id INTEGER NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+    nombre TEXT NOT NULL,
+    categoria TEXT NOT NULL, -- MARKETING | UTILITY | AUTHENTICATION
+    idioma TEXT NOT NULL DEFAULT 'es',
+    header_tipo TEXT NOT NULL DEFAULT 'NONE', -- NONE | TEXT | IMAGE | VIDEO | DOCUMENT
+    header_texto TEXT,
+    header_media_path TEXT,
+    body_texto TEXT NOT NULL,
+    footer_texto TEXT,
+    botones_json TEXT NOT NULL DEFAULT '[]',
+    numero_personalizado INTEGER NOT NULL DEFAULT 0,
+    nota_cliente TEXT,
+    whatsapp_numero_id INTEGER REFERENCES whatsapp_numeros(id) ON DELETE SET NULL,
+    estado TEXT NOT NULL DEFAULT 'pendiente', -- pendiente|esperando_confirmacion|lista_para_enviar|rechazada|cancelada
+    nota_admin TEXT,
+    creado_en TEXT NOT NULL DEFAULT (datetime('now')),
+    actualizado_en TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_plantillas_solicitudes_cliente ON plantillas_solicitudes(cliente_id);
 `);
 
 /**
@@ -287,6 +316,118 @@ agregarColumnaSiFalta('campanas', 'recurrente_mensual INTEGER NOT NULL DEFAULT 0
  */
 agregarColumnaSiFalta('campanas', 'flow_boton INTEGER NOT NULL DEFAULT 0');
 agregarColumnaSiFalta('campanas', 'flow_action_data_json TEXT');
+
+/**
+ * Sistema de créditos (prepago) para clientes independientes — reemplaza la
+ * facturación por tarifa/mensaje SOLO para ellos (admin y empresas
+ * gestionadas siguen igual que siempre). `categoria_plantilla` queda NULL en
+ * una campaña de admin/gestionada; solo se completa cuando quien manda es un
+ * cliente independiente, y ahí es lo que dispara el descuento. Ver
+ * creditos.js, campanas.js (procesarCampana) y server.js (POST /api/campanas).
+ */
+agregarColumnaSiFalta('clientes', 'creditos INTEGER NOT NULL DEFAULT 0');
+agregarColumnaSiFalta('campanas', 'categoria_plantilla TEXT');
+agregarColumnaSiFalta('campanas', 'creditos_consumidos INTEGER');
+
+db.exec(`
+  -- Costo en créditos por categoría de plantilla — una sola fila global
+  -- (id fijo = 1), editable por el admin. Es el costo real (tipo Meta), no
+  -- una tarifa negociada por cliente — eso lo sigue cubriendo facturación.
+  CREATE TABLE IF NOT EXISTS configuracion_creditos (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    costo_marketing INTEGER NOT NULL DEFAULT 3,
+    costo_utility INTEGER NOT NULL DEFAULT 1,
+    costo_authentication INTEGER NOT NULL DEFAULT 2
+  );
+
+  -- Ledger de cargas (cantidad positiva) y consumos (cantidad negativa) de
+  -- créditos. Hoy las cargas las inserta el admin a mano
+  -- (POST /api/admin/clientes-independientes/:id/creditos); cuando se
+  -- conecte la pasarela de pagos, su webhook va a insertar acá mismo.
+  CREATE TABLE IF NOT EXISTS creditos_movimientos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cliente_id INTEGER NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+    cantidad INTEGER NOT NULL,
+    motivo TEXT,
+    campana_id INTEGER REFERENCES campanas(id) ON DELETE SET NULL,
+    creado_en TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_creditos_movimientos_cliente ON creditos_movimientos(cliente_id, creado_en);
+`);
+
+db.prepare('INSERT OR IGNORE INTO configuracion_creditos (id) VALUES (1)').run();
+
+/**
+ * Precios reales en pesos COP por mensaje, según el modelo de cobro de
+ * Daemon Leads (documento interno, sept. 2026): a diferencia del costo
+ * abstracto de arriba, acá el precio varía también por tipo de contenido del
+ * encabezado (texto/imagen/video), no solo por categoría. 1 crédito = 1 peso
+ * COP. `costo_authentication` reutiliza la columna vieja (el documento no
+ * define un precio propio para esa categoría); se migra su valor de fábrica
+ * de 2 (abstracto) a 50 (= Utility texto) solo si nadie lo tocó todavía.
+ */
+agregarColumnaSiFalta('configuracion_creditos', 'costo_marketing_texto INTEGER NOT NULL DEFAULT 120');
+agregarColumnaSiFalta('configuracion_creditos', 'costo_marketing_imagen INTEGER NOT NULL DEFAULT 140');
+agregarColumnaSiFalta('configuracion_creditos', 'costo_marketing_video INTEGER NOT NULL DEFAULT 170');
+agregarColumnaSiFalta('configuracion_creditos', 'costo_utility_texto INTEGER NOT NULL DEFAULT 50');
+agregarColumnaSiFalta('configuracion_creditos', 'costo_utility_imagen INTEGER NOT NULL DEFAULT 70');
+agregarColumnaSiFalta('configuracion_creditos', 'costo_utility_video INTEGER NOT NULL DEFAULT 100');
+db.prepare('UPDATE configuracion_creditos SET costo_authentication = 50 WHERE costo_authentication = 2').run();
+
+/**
+ * Planes mensuales (sección 4 del modelo de cobro Daemon Leads) — cuota fija
+ * de mensajes/mes a precio plano, alternativa a la recarga suelta de arriba.
+ * Un cliente independiente usa UNO de los dos caminos: si tiene `plan_id`
+ * asignado, sus campañas descuentan de acá (ver planes.js); si no, sigue
+ * usando créditos como ya funcionaba. `plan_consumos` es un ledger (como
+ * `creditos_movimientos`) en vez de un contador con reset mensual — la
+ * cuota restante se calcula sumando lo consumido desde el inicio del ciclo
+ * actual, sin necesitar un job de reset. Los mensajes se cuentan en
+ * "medios mensajes" en `plan_consumos`, pero todas las categorías pesan
+ * igual (1 medio = 1 mensaje) — decisión explícita del usuario 2026-09-23,
+ * reemplaza el descuento a medio mensaje para Utility/Authentication que
+ * sugería el documento original.
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS planes_mensuales (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT NOT NULL,
+    mensajes_mes INTEGER NOT NULL,
+    precio_sin_iva INTEGER NOT NULL,
+    orden INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS plan_consumos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cliente_id INTEGER NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+    medios_mensajes INTEGER NOT NULL,
+    motivo TEXT,
+    campana_id INTEGER REFERENCES campanas(id) ON DELETE SET NULL,
+    creado_en TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_plan_consumos_cliente ON plan_consumos(cliente_id, creado_en);
+`);
+
+if (db.prepare('SELECT COUNT(*) AS n FROM planes_mensuales').get().n === 0) {
+  const insertarPlan = db.prepare(
+    'INSERT INTO planes_mensuales (nombre, mensajes_mes, precio_sin_iva, orden) VALUES (?, ?, ?, ?)'
+  );
+  [
+    ['Básico', 600, 72000],
+    ['Pro', 1500, 180000],
+    ['Empresa', 4000, 480000],
+    ['Corporativo', 10000, 1200000],
+    ['Masivo', 25000, 3000000],
+    ['Mayorista', 50000, 6000000],
+    ['Máximo', 100000, 12000000],
+  ].forEach(([nombre, mensajesMes, precio], i) => insertarPlan.run(nombre, mensajesMes, precio, i));
+}
+
+agregarColumnaSiFalta('clientes', 'plan_id INTEGER REFERENCES planes_mensuales(id)');
+agregarColumnaSiFalta('clientes', 'plan_activado_en TEXT');
+agregarColumnaSiFalta('campanas', "canal_cobro TEXT"); // 'plan' | 'creditos' | NULL (admin/gestionada)
+agregarColumnaSiFalta('campanas', 'plan_medios_consumidos INTEGER');
 
 /**
  * `contactos` y `leads_prospectos` tenían `UNIQUE(telefono)` a nivel de

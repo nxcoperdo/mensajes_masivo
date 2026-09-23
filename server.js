@@ -1,7 +1,9 @@
 import express from 'express';
 import session from 'express-session';
+import rateLimit from 'express-rate-limit';
 import multer from 'multer';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import crypto, { timingSafeEqual } from 'crypto';
@@ -13,6 +15,23 @@ import { sendTextMessage, subirMedia, normalizePhone, isWhatsAppConfigured } fro
 import { normalizarVideoWhatsApp, MAX_VIDEO_BYTES } from './video.js';
 import { procesarCampana } from './campanas.js';
 import { iniciarScheduler } from './scheduler.js';
+import {
+  CATEGORIAS_CREDITO,
+  esClienteIndependiente,
+  obtenerConfigCreditos,
+  guardarConfigCreditos,
+  costoPorMensaje,
+  IVA_PORCENTAJE,
+  registrarMovimientoCreditos,
+} from './creditos.js';
+import {
+  clienteTienePlanActivo,
+  pesoMensaje,
+  obtenerPlanesCatalogo,
+  guardarPlanesCatalogo,
+  cuotaRestante,
+  contactosQueEntran,
+} from './planes.js';
 import { buscarNegocios } from './leads.js';
 import {
   calcularResumen,
@@ -69,19 +88,47 @@ const uploadImagen = multer({
   },
 });
 
+// Muestra de encabezado de una SOLICITUD de plantilla (ver sección PLANTILLAS
+// más abajo). A diferencia de `uploadImagen` (que sube directo a Meta durante
+// un envío real), acá no hay ningún envío a Meta — es solo la referencia que
+// el admin va a mirar para recrear la plantilla a mano, así que se guarda en
+// disco tal cual.
+const DIR_MUESTRAS_PLANTILLAS = path.join(__dirname, 'public', 'uploads', 'plantillas');
+fs.mkdirSync(DIR_MUESTRAS_PLANTILLAS, { recursive: true });
+const uploadMuestraPlantilla = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, DIR_MUESTRAS_PLANTILLAS),
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase();
+      cb(null, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`);
+    },
+  }),
+  limits: { fileSize: 16 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!EXTENSIONES_ENCABEZADO_PERMITIDAS.includes(ext)) {
+      return cb(new Error('Formato no soportado. La muestra debe ser una imagen (.jpg, .jpeg, .png) o un video (.mp4, .3gp)'));
+    }
+    cb(null, true);
+  },
+});
+
 // Rutas alcanzables sin sesión iniciada (páginas de login/registro y sus
 // assets, el callback de OAuth de Meta, la política de privacidad, y el
 // webhook que llama Meta directo). Todo lo demás exige `req.session.clienteId`.
 const RUTAS_PUBLICAS = new Set([
   '/login.html',
   '/registro.html',
+  '/planes.html',
   '/oauth/callback',
   '/privacidad.html',
   '/style.css',
+  '/auth.css',
   '/favicon.ico',
   '/auth.js',
   '/api/auth/login',
   '/api/auth/registro',
+  '/api/planes-publico',
 ]);
 
 function esRutaPublica(req) {
@@ -98,6 +145,7 @@ function esRutaPublica(req) {
  * (sembrado en db.js), no como un gate global.
  */
 function requireAuth(req, res, next) {
+  console.log(`[requireAuth] ${req.method} ${req.path} session=${!!(req.session && req.session.clienteId)} public=${esRutaPublica(req)}`);
   if (esRutaPublica(req)) return next();
   if (req.session && req.session.clienteId) return next();
 
@@ -131,13 +179,36 @@ app.use(requireAuth);
 app.use(express.json({ limit: '10mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Límite general para toda la API: generoso para no afectar el uso normal
+// (polling de estado, carga de config, etc.), solo frena abuso/DoS por
+// fuerza bruta de requests repetidos.
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiadas solicitudes. Esperá un momento y volvé a intentar.' },
+});
+app.use('/api/', apiLimiter);
+
+// Límite estricto solo para login/registro: frena fuerza bruta y
+// credential stuffing sin afectar a un usuario normal equivocándose
+// un par de veces con la contraseña.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiados intentos. Esperá unos minutos y volvé a intentar.' },
+});
+
 function clienteActual(req) {
   return db.prepare('SELECT * FROM clientes WHERE id = ?').get(req.session.clienteId);
 }
 
 // ==================== AUTENTICACIÓN ====================
 
-app.post('/api/auth/registro', (req, res) => {
+app.post('/api/auth/registro', authLimiter, (req, res) => {
   const { email, password, nombre_negocio } = req.body || {};
   if (!email || !String(email).trim()) {
     return res.status(400).json({ error: 'Falta el email' });
@@ -167,7 +238,7 @@ app.post('/api/auth/registro', (req, res) => {
   }
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', authLimiter, (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) {
     return res.status(400).json({ error: 'Falta email o contraseña' });
@@ -211,6 +282,26 @@ app.get('/oauth/callback', (req, res) => {
 
 app.get('/api/config', (req, res) => {
   const cliente = clienteActual(req);
+
+  // Teléfono público al que apunta el botón "Número personalizado" de la
+  // pestaña Plantillas (wa.me) — el del admin, tal cual lo cargó en
+  // Facturación > telefono_contacto. No es una credencial, es el número al
+  // que cualquier cliente le puede escribir por WhatsApp.
+  const admin = db.prepare('SELECT telefono_contacto FROM clientes WHERE es_admin = 1 LIMIT 1').get();
+  const contactoWhatsapp = admin?.telefono_contacto ? normalizePhone(admin.telefono_contacto) : null;
+
+  // Para un cliente independiente (no admin), la pestaña Webhook no le
+  // muestra la gestión completa de números (esa es del admin, que asigna
+  // desde SU pool) — solo cuál es el suyo, en modo lectura. La etiqueta
+  // linda vive en la fila de `whatsapp_numeros` de quien lo conectó (el
+  // admin, si se lo asignó), así que se busca por phone_number_id sin
+  // filtrar por cliente_id — no expone ninguna credencial, solo el nombre.
+  let miNumero = null;
+  if (cliente.phone_number_id) {
+    const info = db.prepare('SELECT etiqueta FROM whatsapp_numeros WHERE phone_number_id = ? LIMIT 1').get(cliente.phone_number_id);
+    miNumero = { phone_number_id: cliente.phone_number_id, etiqueta: info?.etiqueta || null };
+  }
+
   res.json({
     cliente: {
       email: cliente.email,
@@ -225,6 +316,8 @@ app.get('/api/config', (req, res) => {
     webhookSignatureConfigured: Boolean(process.env.WHATSAPP_APP_SECRET),
     facebookAppId: process.env.FACEBOOK_APP_ID || null,
     facebookEmbeddedConfigId: process.env.FACEBOOK_EMBEDDED_CONFIG_ID || null,
+    contactoWhatsapp,
+    miNumero,
   });
 });
 
@@ -801,10 +894,46 @@ app.post('/api/campanas', (req, res) => {
       return res.status(400).json({ error: 'No se encontraron los contactos seleccionados' });
     }
 
+    // El costo en créditos varía según el tipo de contenido del encabezado
+    // (texto/imagen/video), así que hace falta saberlo ANTES del chequeo de
+    // saldo — tipoEncabezado() es puro sobre el nombre de archivo, no hace
+    // falta esperar a subir el media para calcularlo.
+    let encabezadoTipo = req.file ? tipoEncabezado(req.file.originalname) : null;
+
+    // Sistema de créditos (prepago) — solo aplica a clientes independientes.
+    // Admin y empresas gestionadas siguen con la facturación de siempre
+    // (categoriaPlantilla queda null para ellos, y procesarCampana lo salta).
+    let categoriaPlantilla = null;
+    if (esClienteIndependiente(cliente)) {
+      categoriaPlantilla = String(req.body?.categoria_plantilla || '').toUpperCase();
+      if (!CATEGORIAS_CREDITO.includes(categoriaPlantilla)) {
+        return res.status(400).json({ error: 'Elegí la categoría de la plantilla (Marketing, Utilidad o Autenticación) para calcular el costo en créditos' });
+      }
+      if (clienteTienePlanActivo(cliente)) {
+        // Camino plan mensual: cuota fija, sin distinguir texto/imagen/video.
+        // No hay desborde automático a créditos — el frontend ya debería
+        // haber evitado llegar acá (ver btnEnviarCampana en app.js), pero
+        // el backend es la fuente de verdad.
+        const peso = pesoMensaje(categoriaPlantilla);
+        const necesarios = peso * contactos.length;
+        const { mediosLibres } = cuotaRestante(cliente.id);
+        if (necesarios > mediosLibres) {
+          return res.status(409).json({
+            error: 'cuota_insuficiente',
+            contactosDisponibles: Math.floor(mediosLibres / peso),
+          });
+        }
+      } else {
+        // Camino créditos sueltos (recarga suelta, precios reales COP).
+        const costoTotal = costoPorMensaje(categoriaPlantilla, encabezadoTipo) * contactos.length;
+        if (cliente.creditos < costoTotal) {
+          return res.status(402).json({ error: `No te alcanzan los créditos: esta campaña necesita ${costoTotal} y tenés ${cliente.creditos}.` });
+        }
+      }
+    }
+
     let imagenMediaId = null;
-    let encabezadoTipo = null;
     if (req.file) {
-      encabezadoTipo = tipoEncabezado(req.file.originalname);
       let { buffer, mimetype } = req.file;
 
       if (encabezadoTipo === 'video') {
@@ -851,8 +980,8 @@ app.post('/api/campanas', (req, res) => {
         const futura = esFechaFutura(fechaProgramada);
         const result = db
           .prepare(
-            `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id, fecha_programada, contacto_ids_json, recurrente_mensual, flow_boton, flow_action_data_json)
-             VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`
+            `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id, fecha_programada, contacto_ids_json, recurrente_mensual, flow_boton, flow_action_data_json, categoria_plantilla)
+             VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`
           )
           .run(
             templateNombreLimpio,
@@ -866,7 +995,8 @@ app.post('/api/campanas', (req, res) => {
             JSON.stringify([contacto.id]),
             esRecurrenteMensual,
             esFlowBoton,
-            flowActionDataJson
+            flowActionDataJson,
+            categoriaPlantilla
           );
         creadas.push(result.lastInsertRowid);
         if (!futura) {
@@ -882,6 +1012,8 @@ app.post('/api/campanas', (req, res) => {
             accessToken: cliente.access_token,
             flowBoton: esFlowBoton,
             flowActionData,
+            clienteId: cliente.id,
+            categoriaPlantilla,
           });
         }
       }
@@ -895,8 +1027,8 @@ app.post('/api/campanas', (req, res) => {
 
     const result = db
       .prepare(
-        `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id, fecha_programada, contacto_ids_json, recurrente_mensual, flow_boton, flow_action_data_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id, fecha_programada, contacto_ids_json, recurrente_mensual, flow_boton, flow_action_data_json, categoria_plantilla)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         templateNombreLimpio,
@@ -911,7 +1043,8 @@ app.post('/api/campanas', (req, res) => {
         JSON.stringify(contactos.map((c) => c.id)),
         esRecurrenteMensual,
         esFlowBoton,
-        flowActionDataJson
+        flowActionDataJson,
+        categoriaPlantilla
       );
 
     const campanaId = result.lastInsertRowid;
@@ -930,6 +1063,8 @@ app.post('/api/campanas', (req, res) => {
         accessToken: cliente.access_token,
         flowBoton: esFlowBoton,
         flowActionData,
+        clienteId: cliente.id,
+        categoriaPlantilla,
       });
     }
 
@@ -1271,6 +1406,233 @@ app.patch('/api/admin/empresas/:id/numero', (req, res) => {
 
   const actualizada = db.prepare('SELECT * FROM clientes WHERE id = ?').get(empresa.id);
   res.json({ empresa: serializarEmpresa(actualizada) });
+});
+
+// ==================== ADMIN: EMPRESAS INDEPENDIENTES ====================
+//
+// A diferencia de una "empresa gestionada" (arriba), una empresa
+// independiente es una cuenta que se registró SOLA desde registro.html —
+// tiene su propio login y arma sus contactos/campañas/plantillas desde su
+// propio panel. Lo único que el admin hace acá es asignarle uno de SUS
+// números conectados (mismo mecanismo que arriba) para que deje de estar
+// `pendiente_whatsapp` y pueda mandar campañas con las plantillas que ya
+// tenga aprobadas — sin esto, aunque tenga una plantilla en estado "lista
+// para enviar", no tiene con qué número mandarla.
+
+function serializarClienteIndependiente(cliente) {
+  const plan = cliente.plan_id ? db.prepare('SELECT id, nombre, mensajes_mes FROM planes_mensuales WHERE id = ?').get(cliente.plan_id) : null;
+  const cuota = plan ? cuotaRestante(cliente.id) : null;
+  return {
+    id: cliente.id,
+    email: cliente.email,
+    nombre_negocio: cliente.nombre_negocio,
+    estado: cliente.estado,
+    whatsapp_conectado: Boolean(cliente.phone_number_id && cliente.access_token),
+    phone_number_id: cliente.phone_number_id,
+    creditos: cliente.creditos,
+    plan_id: cliente.plan_id || null,
+    plan_nombre: plan?.nombre || null,
+    plan_mensajes_mes: plan?.mensajes_mes || null,
+    plan_contactos_disponibles: cuota
+      ? { MARKETING: contactosQueEntran(cliente.id, 'MARKETING'), UTILITY: contactosQueEntran(cliente.id, 'UTILITY') }
+      : null,
+  };
+}
+
+app.get('/api/admin/clientes-independientes', (req, res) => {
+  const propio = clienteActual(req);
+  if (!propio.es_admin) {
+    return res.status(403).json({ error: 'No tenés permiso para ver esta lista' });
+  }
+  const clientes = db
+    .prepare(`SELECT * FROM clientes ORDER BY nombre_negocio COLLATE NOCASE ASC, email COLLATE NOCASE ASC`)
+    .all()
+    .filter(esClienteIndependiente);
+  res.json({ clientes: clientes.map(serializarClienteIndependiente) });
+});
+
+app.patch('/api/admin/clientes-independientes/:id/numero', (req, res) => {
+  const propio = clienteActual(req);
+  if (!propio.es_admin) {
+    return res.status(403).json({ error: 'No tenés permiso para asignar números' });
+  }
+
+  const cliente = db.prepare('SELECT * FROM clientes WHERE id = ?').get(req.params.id);
+  if (!cliente || !esClienteIndependiente(cliente)) return res.status(404).json({ error: 'Cliente no encontrado' });
+
+  const { whatsapp_numero_id } = req.body || {};
+  if (!whatsapp_numero_id) {
+    // Desasignar: vuelve a "pendiente_whatsapp" (ej: si el admin se equivocó de número).
+    db.prepare(`UPDATE clientes SET waba_id = NULL, phone_number_id = NULL, access_token = NULL, estado = 'pendiente_whatsapp' WHERE id = ?`).run(cliente.id);
+  } else {
+    const numero = db
+      .prepare('SELECT * FROM whatsapp_numeros WHERE id = ? AND cliente_id = ?')
+      .get(whatsapp_numero_id, propio.id);
+    if (!numero) return res.status(404).json({ error: 'Ese número no está entre los tuyos conectados' });
+
+    db.prepare(
+      `UPDATE clientes SET waba_id = ?, phone_number_id = ?, access_token = ?, estado = 'conectado' WHERE id = ?`
+    ).run(numero.waba_id, numero.phone_number_id, numero.access_token, cliente.id);
+  }
+
+  const actualizado = db.prepare('SELECT * FROM clientes WHERE id = ?').get(cliente.id);
+  res.json({ cliente: serializarClienteIndependiente(actualizado) });
+});
+
+/**
+ * Asigna (o quita, con `plan_id` null) un plan mensual a un cliente
+ * independiente. Asignar SIEMPRE resetea `plan_activado_en` a "ahora" — es
+ * también el mecanismo manual de "recarga" cuando el admin le da más cupo a
+ * alguien que pidió ampliar (reasignarle el mismo plan u otro más grande
+ * arranca un ciclo nuevo desde ese momento). Quitar el plan hace que el
+ * cliente vuelva al camino de créditos sueltos.
+ */
+app.patch('/api/admin/clientes-independientes/:id/plan', (req, res) => {
+  const propio = clienteActual(req);
+  if (!propio.es_admin) {
+    return res.status(403).json({ error: 'No tenés permiso para asignar planes' });
+  }
+
+  const cliente = db.prepare('SELECT * FROM clientes WHERE id = ?').get(req.params.id);
+  if (!cliente || !esClienteIndependiente(cliente)) return res.status(404).json({ error: 'Cliente no encontrado' });
+
+  const { plan_id } = req.body || {};
+  if (!plan_id) {
+    db.prepare('UPDATE clientes SET plan_id = NULL, plan_activado_en = NULL WHERE id = ?').run(cliente.id);
+  } else {
+    const plan = db.prepare('SELECT id FROM planes_mensuales WHERE id = ?').get(plan_id);
+    if (!plan) return res.status(404).json({ error: 'Ese plan no existe' });
+    db.prepare(`UPDATE clientes SET plan_id = ?, plan_activado_en = datetime('now') WHERE id = ?`).run(plan.id, cliente.id);
+  }
+
+  const actualizado = db.prepare('SELECT * FROM clientes WHERE id = ?').get(cliente.id);
+  res.json({ cliente: serializarClienteIndependiente(actualizado) });
+});
+
+/**
+ * Carga (o corrige, con `cantidad` negativa) el saldo de créditos de un
+ * cliente independiente. Manual porque todavía no hay pasarela de pagos
+ * conectada — cuando se conecte, su webhook va a llamar
+ * `registrarMovimientoCreditos` igual que esto, sin tener que tocar nada más.
+ */
+app.post('/api/admin/clientes-independientes/:id/creditos', (req, res) => {
+  const propio = clienteActual(req);
+  if (!propio.es_admin) {
+    return res.status(403).json({ error: 'No tenés permiso para cargar créditos' });
+  }
+
+  const cliente = db.prepare('SELECT * FROM clientes WHERE id = ?').get(req.params.id);
+  if (!cliente || !esClienteIndependiente(cliente)) return res.status(404).json({ error: 'Cliente no encontrado' });
+
+  const cantidad = Math.trunc(Number(req.body?.cantidad));
+  const motivo = req.body?.motivo ? String(req.body.motivo).trim() : '';
+  if (!Number.isInteger(cantidad) || cantidad === 0) {
+    return res.status(400).json({ error: 'La cantidad tiene que ser un número entero distinto de 0' });
+  }
+  if (!motivo) {
+    return res.status(400).json({ error: 'Falta el motivo de la carga' });
+  }
+
+  registrarMovimientoCreditos({ clienteId: cliente.id, cantidad, motivo });
+
+  const actualizado = db.prepare('SELECT * FROM clientes WHERE id = ?').get(cliente.id);
+  res.json({ cliente: serializarClienteIndependiente(actualizado) });
+});
+
+app.get('/api/admin/configuracion-creditos', (req, res) => {
+  const propio = clienteActual(req);
+  if (!propio.es_admin) {
+    return res.status(403).json({ error: 'No tenés permiso para ver esta configuración' });
+  }
+  res.json({ costos: obtenerConfigCreditos(), ivaPorcentaje: IVA_PORCENTAJE });
+});
+
+app.put('/api/admin/configuracion-creditos', (req, res) => {
+  const propio = clienteActual(req);
+  if (!propio.es_admin) {
+    return res.status(403).json({ error: 'No tenés permiso para cambiar esta configuración' });
+  }
+  try {
+    const costos = guardarConfigCreditos(req.body || {});
+    res.json({ costos });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * Catálogo de planes sin sesión — lo consume la página pública /planes.html
+ * (landing de precios, ve gente que todavía no se registró). Sin datos
+ * sensibles: mismo nombre/mensajes/precio que ya se ven en el panel, más el
+ * teléfono de contacto público (mismo que expone /api/config).
+ */
+app.get('/api/planes-publico', (req, res) => {
+  const admin = db.prepare('SELECT telefono_contacto FROM clientes WHERE es_admin = 1 LIMIT 1').get();
+  const contactoWhatsapp = admin?.telefono_contacto ? normalizePhone(admin.telefono_contacto) : null;
+  res.json({ planes: obtenerPlanesCatalogo(), ivaPorcentaje: IVA_PORCENTAJE, contactoWhatsapp });
+});
+
+app.get('/api/admin/planes', (req, res) => {
+  const propio = clienteActual(req);
+  if (!propio.es_admin) {
+    return res.status(403).json({ error: 'No tenés permiso para ver esta configuración' });
+  }
+  res.json({ planes: obtenerPlanesCatalogo(), ivaPorcentaje: IVA_PORCENTAJE });
+});
+
+app.put('/api/admin/planes', (req, res) => {
+  const propio = clienteActual(req);
+  if (!propio.es_admin) {
+    return res.status(403).json({ error: 'No tenés permiso para cambiar esta configuración' });
+  }
+  try {
+    const planes = guardarPlanesCatalogo(req.body?.planes || []);
+    res.json({ planes });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * Saldo y movimientos del cliente logueado — solo tiene sentido para un
+ * independiente (admin/gestionadas no manejan créditos). `aplica: false` le
+ * dice al frontend que no muestre nada de esto en "Nueva campaña".
+ */
+app.get('/api/creditos', (req, res) => {
+  const cliente = clienteActual(req);
+  if (!esClienteIndependiente(cliente)) {
+    return res.json({ aplica: false });
+  }
+  const movimientos = db
+    .prepare('SELECT cantidad, motivo, creado_en FROM creditos_movimientos WHERE cliente_id = ? ORDER BY creado_en DESC, id DESC LIMIT 20')
+    .all(cliente.id);
+  res.json({ aplica: true, creditos: cliente.creditos, costos: obtenerConfigCreditos(), ivaPorcentaje: IVA_PORCENTAJE, movimientos });
+});
+
+/**
+ * Cuota del plan mensual del cliente logueado — solo tiene sentido para un
+ * independiente CON plan asignado (sin plan, usa /api/creditos en su
+ * lugar). `aplica: false` le dice al frontend que no muestre nada de esto.
+ */
+app.get('/api/plan', (req, res) => {
+  const cliente = clienteActual(req);
+  if (!esClienteIndependiente(cliente) || !clienteTienePlanActivo(cliente)) {
+    return res.json({ aplica: false });
+  }
+  const cuota = cuotaRestante(cliente.id);
+  if (!cuota) return res.json({ aplica: false });
+
+  res.json({
+    aplica: true,
+    plan: cuota.plan,
+    mediosDisponibles: cuota.mediosDisponibles,
+    mediosLibres: cuota.mediosLibres,
+    contactosQueEntran: {
+      MARKETING: contactosQueEntran(cliente.id, 'MARKETING'),
+      UTILITY: contactosQueEntran(cliente.id, 'UTILITY'),
+      AUTHENTICATION: contactosQueEntran(cliente.id, 'AUTHENTICATION'),
+    },
+  });
 });
 
 /** Datos de facturación (sin credenciales) que se mandan al frontend. */
@@ -2097,6 +2459,270 @@ app.post('/api/conversaciones/:telefono/responder', async (req, res) => {
     return res.status(502).json({ error: resultado.error, id: insertado.lastInsertRowid });
   }
   res.status(201).json({ id: insertado.lastInsertRowid, wa_message_id: resultado.messageId });
+});
+
+// ==================== PLANTILLAS (solicitudes) ====================
+//
+// Cualquier cliente arma acá una plantilla con el mismo formato que pide el
+// creador de plantillas de Meta (categoría, encabezado, cuerpo, pie, botones)
+// y la manda como "solicitud". El admin las ve todas juntas (GET
+// /api/admin/plantillas), la crea A MANO en el Administrador de Meta — no hay
+// ninguna llamada a la Graph API de creación de plantillas acá, es decisión
+// explícita — y va actualizando su estado y el número que le asigna (PATCH
+// /api/admin/plantillas/:id, siempre de entre SUS propios `whatsapp_numeros`).
+
+const CATEGORIAS_PLANTILLA = ['MARKETING', 'UTILITY', 'AUTHENTICATION'];
+const HEADER_TIPOS_PLANTILLA = ['NONE', 'TEXT', 'IMAGE', 'VIDEO', 'DOCUMENT'];
+const ESTADOS_PLANTILLA = ['pendiente', 'esperando_confirmacion', 'lista_para_enviar', 'rechazada', 'cancelada'];
+const TIPOS_BOTON_PLANTILLA = ['QUICK_REPLY', 'URL', 'PHONE_NUMBER'];
+
+/**
+ * Valida y limpia el array de botones que manda el cliente, respetando los
+ * mismos límites que exige Meta para plantillas: hasta 10 en total, máximo 3
+ * de respuesta rápida, 2 de URL y 1 de llamada telefónica.
+ */
+function validarBotonesPlantilla(botonesRaw) {
+  if (botonesRaw === undefined || botonesRaw === null || botonesRaw === '') return [];
+  const lista = Array.isArray(botonesRaw) ? botonesRaw : JSON.parse(botonesRaw);
+  if (!Array.isArray(lista)) throw new Error('Los botones deben ser una lista');
+  if (lista.length > 10) throw new Error('Máximo 10 botones por plantilla');
+
+  const contador = { QUICK_REPLY: 0, URL: 0, PHONE_NUMBER: 0 };
+  const limpios = lista.map((b, i) => {
+    const tipo = String(b?.tipo || '').toUpperCase();
+    if (!TIPOS_BOTON_PLANTILLA.includes(tipo)) throw new Error(`Botón ${i + 1}: tipo inválido`);
+    const texto = String(b?.texto || '').trim();
+    if (!texto) throw new Error(`Botón ${i + 1}: falta el texto`);
+    contador[tipo] += 1;
+
+    const boton = { tipo, texto };
+    if (tipo === 'URL') {
+      boton.url = String(b?.url || '').trim();
+      if (!boton.url) throw new Error(`Botón ${i + 1}: falta la URL`);
+    }
+    if (tipo === 'PHONE_NUMBER') {
+      boton.telefono = String(b?.telefono || '').trim();
+      if (!boton.telefono) throw new Error(`Botón ${i + 1}: falta el teléfono`);
+    }
+    return boton;
+  });
+
+  if (contador.QUICK_REPLY > 3) throw new Error('Máximo 3 botones de respuesta rápida');
+  if (contador.URL > 2) throw new Error('Máximo 2 botones de URL');
+  if (contador.PHONE_NUMBER > 1) throw new Error('Máximo 1 botón de llamada telefónica');
+  return limpios;
+}
+
+/**
+ * Arma el bloque `components` con la forma exacta que espera la Graph API de
+ * Meta para crear una plantilla. No se manda a ningún lado — es solo para que
+ * el admin lo use de referencia (o lo copie) al recrearla a mano en el
+ * Administrador de Meta.
+ */
+function construirComponentesMeta(fila) {
+  const componentes = [];
+
+  if (fila.header_tipo === 'TEXT' && fila.header_texto) {
+    componentes.push({ type: 'HEADER', format: 'TEXT', text: fila.header_texto });
+  } else if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(fila.header_tipo)) {
+    componentes.push({
+      type: 'HEADER',
+      format: fila.header_tipo,
+      example: { header_handle: ['<subir la muestra adjunta a Meta y pegar acá el handle que devuelve>'] },
+    });
+  }
+
+  componentes.push({ type: 'BODY', text: fila.body_texto });
+
+  if (fila.footer_texto) {
+    componentes.push({ type: 'FOOTER', text: fila.footer_texto });
+  }
+
+  const botones = JSON.parse(fila.botones_json || '[]');
+  if (botones.length > 0) {
+    componentes.push({
+      type: 'BUTTONS',
+      buttons: botones.map((b) => {
+        if (b.tipo === 'URL') return { type: 'URL', text: b.texto, url: b.url };
+        if (b.tipo === 'PHONE_NUMBER') return { type: 'PHONE_NUMBER', text: b.texto, phone_number: b.telefono };
+        return { type: 'QUICK_REPLY', text: b.texto };
+      }),
+    });
+  }
+
+  return { name: fila.nombre, language: fila.idioma, category: fila.categoria, components: componentes };
+}
+
+function serializarSolicitudPlantilla(fila) {
+  return {
+    id: fila.id,
+    nombre: fila.nombre,
+    categoria: fila.categoria,
+    idioma: fila.idioma,
+    header_tipo: fila.header_tipo,
+    header_texto: fila.header_texto,
+    header_media_url: fila.header_media_path ? `/uploads/plantillas/${fila.header_media_path}` : null,
+    body_texto: fila.body_texto,
+    footer_texto: fila.footer_texto,
+    botones: JSON.parse(fila.botones_json || '[]'),
+    numero_personalizado: Boolean(fila.numero_personalizado),
+    nota_cliente: fila.nota_cliente,
+    numero_asignado: fila.numero_etiqueta || fila.numero_phone_id || null,
+    estado: fila.estado,
+    nota_admin: fila.nota_admin,
+    creado_en: fila.creado_en,
+    actualizado_en: fila.actualizado_en,
+  };
+}
+
+const SELECT_PLANTILLA_BASE = `
+  SELECT s.*, c.nombre_negocio AS cliente_nombre, c.email AS cliente_email,
+         n.etiqueta AS numero_etiqueta, n.phone_number_id AS numero_phone_id
+  FROM plantillas_solicitudes s
+  JOIN clientes c ON c.id = s.cliente_id
+  LEFT JOIN whatsapp_numeros n ON n.id = s.whatsapp_numero_id
+`;
+
+/** Serialización para el panel admin: agrega datos del cliente y el JSON estilo Meta. */
+function serializarSolicitudAdmin(fila) {
+  return {
+    ...serializarSolicitudPlantilla(fila),
+    cliente_id: fila.cliente_id,
+    cliente_nombre: fila.cliente_nombre || fila.cliente_email,
+    cliente_email: fila.cliente_email,
+    whatsapp_numero_id: fila.whatsapp_numero_id,
+    componentes_meta: construirComponentesMeta(fila),
+  };
+}
+
+app.post('/api/plantillas', uploadMuestraPlantilla.single('muestra_encabezado'), (req, res) => {
+  const body = req.body || {};
+  const nombre = String(body.nombre || '').trim().toLowerCase();
+  const categoria = String(body.categoria || '').toUpperCase();
+  const idioma = String(body.idioma || 'es').trim() || 'es';
+  const headerTipo = String(body.header_tipo || 'NONE').toUpperCase();
+  const headerTexto = body.header_texto ? String(body.header_texto).trim() : null;
+  const bodyTexto = String(body.body_texto || '').trim();
+  const footerTexto = body.footer_texto ? String(body.footer_texto).trim() : null;
+  const numeroPersonalizado = ['true', '1', true].includes(body.numero_personalizado);
+  const notaCliente = body.nota_cliente ? String(body.nota_cliente).trim() : null;
+
+  if (!/^[a-z0-9_]+$/.test(nombre)) {
+    return res.status(400).json({ error: 'El nombre debe ir en minúsculas, sin espacios ni acentos (solo letras, números y guion bajo)' });
+  }
+  if (!CATEGORIAS_PLANTILLA.includes(categoria)) {
+    return res.status(400).json({ error: 'Categoría inválida' });
+  }
+  if (!HEADER_TIPOS_PLANTILLA.includes(headerTipo)) {
+    return res.status(400).json({ error: 'Tipo de encabezado inválido' });
+  }
+  if (!bodyTexto) {
+    return res.status(400).json({ error: 'Falta el cuerpo de la plantilla' });
+  }
+  if (bodyTexto.length > 1024) {
+    return res.status(400).json({ error: 'El cuerpo no puede superar 1024 caracteres' });
+  }
+  if (headerTipo === 'TEXT' && (!headerTexto || headerTexto.length > 60)) {
+    return res.status(400).json({ error: 'El texto del encabezado es obligatorio y no puede superar 60 caracteres' });
+  }
+  if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerTipo) && !req.file) {
+    return res.status(400).json({ error: 'Subí un archivo de muestra para ese tipo de encabezado' });
+  }
+  if (footerTexto && footerTexto.length > 60) {
+    return res.status(400).json({ error: 'El pie no puede superar 60 caracteres' });
+  }
+
+  let botonesLimpios;
+  try {
+    botonesLimpios = validarBotonesPlantilla(body.botones_json);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+
+  const result = db
+    .prepare(
+      `INSERT INTO plantillas_solicitudes
+        (cliente_id, nombre, categoria, idioma, header_tipo, header_texto, header_media_path, body_texto, footer_texto, botones_json, numero_personalizado, nota_cliente)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      req.session.clienteId,
+      nombre,
+      categoria,
+      idioma,
+      headerTipo,
+      headerTexto,
+      req.file ? req.file.filename : null,
+      bodyTexto,
+      footerTexto,
+      JSON.stringify(botonesLimpios),
+      numeroPersonalizado ? 1 : 0,
+      notaCliente
+    );
+
+  const creada = db.prepare(`${SELECT_PLANTILLA_BASE} WHERE s.id = ?`).get(result.lastInsertRowid);
+  res.status(201).json({ solicitud: serializarSolicitudPlantilla(creada) });
+});
+
+app.get('/api/plantillas', (req, res) => {
+  const filas = db.prepare(`${SELECT_PLANTILLA_BASE} WHERE s.cliente_id = ? ORDER BY s.creado_en DESC`).all(req.session.clienteId);
+  res.json({ solicitudes: filas.map(serializarSolicitudPlantilla) });
+});
+
+app.get('/api/admin/plantillas', (req, res) => {
+  const propio = clienteActual(req);
+  if (!propio.es_admin) {
+    return res.status(403).json({ error: 'No tenés permiso para ver esta lista' });
+  }
+
+  const estado = req.query.estado ? String(req.query.estado) : null;
+  if (estado && !ESTADOS_PLANTILLA.includes(estado)) {
+    return res.status(400).json({ error: 'Estado inválido' });
+  }
+
+  const filas = db
+    .prepare(`${SELECT_PLANTILLA_BASE} ${estado ? 'WHERE s.estado = ?' : ''} ORDER BY s.creado_en DESC`)
+    .all(...(estado ? [estado] : []));
+  res.json({ solicitudes: filas.map(serializarSolicitudAdmin) });
+});
+
+app.patch('/api/admin/plantillas/:id', (req, res) => {
+  const propio = clienteActual(req);
+  if (!propio.es_admin) {
+    return res.status(403).json({ error: 'No tenés permiso para gestionar solicitudes' });
+  }
+
+  const solicitud = db.prepare('SELECT * FROM plantillas_solicitudes WHERE id = ?').get(req.params.id);
+  if (!solicitud) return res.status(404).json({ error: 'Solicitud no encontrada' });
+
+  const { estado, nota_admin, whatsapp_numero_id } = req.body || {};
+
+  if (estado !== undefined) {
+    if (!ESTADOS_PLANTILLA.includes(estado)) {
+      return res.status(400).json({ error: 'Estado inválido' });
+    }
+    db.prepare(`UPDATE plantillas_solicitudes SET estado = ?, actualizado_en = datetime('now') WHERE id = ?`).run(estado, solicitud.id);
+  }
+
+  if (nota_admin !== undefined) {
+    db.prepare(`UPDATE plantillas_solicitudes SET nota_admin = ?, actualizado_en = datetime('now') WHERE id = ?`).run(
+      nota_admin ? String(nota_admin).trim() : null,
+      solicitud.id
+    );
+  }
+
+  if (whatsapp_numero_id !== undefined) {
+    if (whatsapp_numero_id === null || whatsapp_numero_id === '') {
+      db.prepare(`UPDATE plantillas_solicitudes SET whatsapp_numero_id = NULL, actualizado_en = datetime('now') WHERE id = ?`).run(solicitud.id);
+    } else {
+      const numero = db.prepare('SELECT * FROM whatsapp_numeros WHERE id = ? AND cliente_id = ?').get(whatsapp_numero_id, propio.id);
+      if (!numero) return res.status(404).json({ error: 'Ese número no está entre los tuyos conectados' });
+      db.prepare(`UPDATE plantillas_solicitudes SET whatsapp_numero_id = ?, actualizado_en = datetime('now') WHERE id = ?`).run(numero.id, solicitud.id);
+    }
+  }
+
+  const actualizada = db.prepare(`${SELECT_PLANTILLA_BASE} WHERE s.id = ?`).get(solicitud.id);
+  res.json({ solicitud: serializarSolicitudAdmin(actualizada) });
 });
 
 const PORT = process.env.PORT || 4100;

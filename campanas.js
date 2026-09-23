@@ -1,5 +1,7 @@
 import { db } from './db.js';
 import { sendTemplate } from './whatsapp.js';
+import { costoPorMensaje, registrarMovimientoCreditos } from './creditos.js';
+import { clienteTienePlanActivo, pesoMensaje, cuotaRestante, registrarConsumoPlan } from './planes.js';
 
 /**
  * Resuelve los valores finales de los parámetros de plantilla para un
@@ -62,8 +64,8 @@ function clonarParaElMesSiguiente(campana) {
 
   const result = db
     .prepare(
-      `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id, fecha_programada, contacto_ids_json, recurrente_mensual, flow_boton, flow_action_data_json)
-       VALUES (?, ?, ?, ?, ?, ?, 'programada', ?, ?, ?, 1, ?, ?)`
+      `INSERT INTO campanas (template_nombre, idioma, parametros_json, imagen_media_id, encabezado_tipo, total_contactos, estado, cliente_id, fecha_programada, contacto_ids_json, recurrente_mensual, flow_boton, flow_action_data_json, categoria_plantilla)
+       VALUES (?, ?, ?, ?, ?, ?, 'programada', ?, ?, ?, 1, ?, ?, ?)`
     )
     .run(
       campana.template_nombre,
@@ -76,7 +78,8 @@ function clonarParaElMesSiguiente(campana) {
       siguienteFecha,
       campana.contacto_ids_json,
       campana.flow_boton ? 1 : 0,
-      campana.flow_action_data_json || null
+      campana.flow_action_data_json || null,
+      campana.categoria_plantilla || null
     );
 
   let contactoIds = [];
@@ -112,7 +115,40 @@ export async function procesarCampana({
   accessToken,
   flowBoton = false,
   flowActionData = null,
+  clienteId = null,
+  categoriaPlantilla = null,
 }) {
+  // Chequeo defensivo de créditos justo antes de mandar — cubre el caso de
+  // una campaña programada, donde pasó tiempo desde que se creó (y se validó
+  // el saldo) hasta que el scheduler la dispara de verdad. Si ya no alcanza,
+  // no se manda NADA (bloqueo total, no parcial) y queda 'cancelada'.
+  // `categoriaPlantilla` viene null para admin/empresas gestionadas — ahí
+  // este bloque entero no hace nada, cero cambio de comportamiento.
+  if (categoriaPlantilla) {
+    const cliente = db.prepare('SELECT creditos, plan_id FROM clientes WHERE id = ?').get(clienteId);
+    if (!cliente) {
+      console.error(`[campañas] campaña ${campanaId} cancelada: cliente ${clienteId} no encontrado`);
+      db.prepare(`UPDATE campanas SET estado = 'cancelada' WHERE id = ?`).run(campanaId);
+      return;
+    }
+    if (clienteTienePlanActivo(cliente)) {
+      const necesarios = pesoMensaje(categoriaPlantilla) * contactos.length;
+      const { mediosLibres } = cuotaRestante(clienteId);
+      if (necesarios > mediosLibres) {
+        console.error(`[campañas] campaña ${campanaId} cancelada: cuota de plan insuficiente (necesita ${necesarios} medios, quedan ${mediosLibres})`);
+        db.prepare(`UPDATE campanas SET estado = 'cancelada' WHERE id = ?`).run(campanaId);
+        return;
+      }
+    } else {
+      const costoTotal = costoPorMensaje(categoriaPlantilla, encabezadoTipo) * contactos.length;
+      if (cliente.creditos < costoTotal) {
+        console.error(`[campañas] campaña ${campanaId} cancelada: créditos insuficientes (necesita ${costoTotal}, tiene ${cliente.creditos})`);
+        db.prepare(`UPDATE campanas SET estado = 'cancelada' WHERE id = ?`).run(campanaId);
+        return;
+      }
+    }
+  }
+
   const delayMs = Number(process.env.ENVIO_DELAY_MS) || 250;
   const insertEnvio = db.prepare(`
     INSERT INTO envios (campana_id, contacto_id, telefono, nombre, estado, error, wa_message_id)
@@ -154,6 +190,37 @@ export async function procesarCampana({
   }
 
   db.prepare(`UPDATE campanas SET estado = 'completada' WHERE id = ?`).run(campanaId);
+
+  // Descuento real: solo lo que efectivamente salió OK (los fallidos no se
+  // cobran, mismo criterio que ya usa la facturación por tarifa/mensaje).
+  if (categoriaPlantilla) {
+    const exitosos = db.prepare(`SELECT COUNT(*) AS n FROM envios WHERE campana_id = ? AND estado = 'enviado'`).get(campanaId).n;
+    const cliente = db.prepare('SELECT plan_id FROM clientes WHERE id = ?').get(clienteId);
+
+    if (clienteTienePlanActivo(cliente)) {
+      const consumido = exitosos * pesoMensaje(categoriaPlantilla);
+      if (consumido > 0) {
+        registrarConsumoPlan({
+          clienteId,
+          medios: consumido,
+          motivo: `Campaña "${template_nombre}" (${categoriaPlantilla})`,
+          campanaId,
+        });
+      }
+      db.prepare(`UPDATE campanas SET categoria_plantilla = ?, canal_cobro = 'plan', plan_medios_consumidos = ? WHERE id = ?`).run(categoriaPlantilla, consumido, campanaId);
+    } else {
+      const consumido = exitosos * costoPorMensaje(categoriaPlantilla, encabezadoTipo);
+      if (consumido > 0) {
+        registrarMovimientoCreditos({
+          clienteId,
+          cantidad: -consumido,
+          motivo: `Campaña "${template_nombre}" (${categoriaPlantilla})`,
+          campanaId,
+        });
+      }
+      db.prepare(`UPDATE campanas SET categoria_plantilla = ?, canal_cobro = 'creditos', creditos_consumidos = ? WHERE id = ?`).run(categoriaPlantilla, consumido, campanaId);
+    }
+  }
 
   const campana = db.prepare('SELECT * FROM campanas WHERE id = ?').get(campanaId);
   if (campana?.recurrente_mensual) {
