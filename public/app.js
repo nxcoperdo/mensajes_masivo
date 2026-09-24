@@ -129,6 +129,7 @@ async function cargarConfig() {
       // ofrecemos la landing de planes (/planes.html) para que elija uno.
       const sinNadaConQueEnviar = !misPlan?.aplica && (!misCreditos?.aplica || misCreditos.creditos <= 0);
       document.getElementById('cardVerPlanes').classList.toggle('hidden', !sinNadaConQueEnviar);
+      iniciarGuia(data.cliente.estado === 'conectado');
     }
 
     if (data.cliente.estado !== 'conectado') {
@@ -302,7 +303,7 @@ async function prepararBotonConectar(btnId, onSuccess) {
           if (response.status !== 'unknown') {
             box.classList.remove('hidden');
             box.classList.add('error');
-            box.textContent = 'No se completó la conexión con WhatsApp. Probá de nuevo.';
+            box.textContent = 'No se completó la conexión con WhatsApp. Prueba de nuevo.';
           }
           return;
         }
@@ -427,6 +428,7 @@ async function cargarContactos() {
   const data = await res.json();
   contactos = Array.isArray(data.contactos) ? data.contactos : [];
   renderContactos();
+  actualizarGuia();
 }
 
 const ICONO_ELIMINAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6" /></svg>';
@@ -454,7 +456,12 @@ function renderTablaContactos({ tbody, lista, seleccionados, editandoId, totalEl
       <tr><td colspan="5">
         <div class="empty-state">
           ${ICONO_CONTACTOS_VACIO}
-          <div>Todavía no cargaste contactos. Importá un CSV/Excel o agregá uno manual.</div>
+          <div>Todavía no has cargado contactos. Importa un CSV/Excel o agrega uno manual.</div>
+          ${tbody.id === 'tablaContactos' ? `
+            <div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 12px;">
+              <button type="button" class="btn btn-sm btn-primary" data-ir-importar>Importar archivo</button>
+              <button type="button" class="btn btn-sm btn-outline" data-descargar-ejemplo>Descargar ejemplo</button>
+            </div>` : ''}
         </div>
       </td></tr>
     `;
@@ -573,9 +580,9 @@ function renderListasGuardadas({ tbody, totalEl, listas, onUsar, onEliminar }) {
  */
 function avisarSeleccionParcial(seleccionados, guardadosEnLista) {
   if (seleccionados === 0) {
-    alert('Esa lista ya no tiene contactos: se borraron después de importarla (o se reimportó el archivo). Volvé a importar el CSV/Excel.');
+    alert('Esa lista ya no tiene contactos: se borraron después de importarla (o se reimportó el archivo). Vuelve a importar el CSV/Excel.');
   } else if (seleccionados < guardadosEnLista) {
-    alert(`Se seleccionaron ${seleccionados} de ${guardadosEnLista}. Los otros ya no existen; reimportá el archivo si los necesitás.`);
+    alert(`Se seleccionaron ${seleccionados} de ${guardadosEnLista}. Los otros ya no existen; vuelve a importar el archivo si los necesitas.`);
   }
 }
 
@@ -635,7 +642,7 @@ async function calcularYMostrarCotizacion({ contactoIds, clienteId, box, btnDesc
     const { tarifa_por_mensaje: tarifa, moneda, iva_porcentaje: iva } = data.config;
     if (!(tarifa > 0)) {
       box.classList.add('error');
-      box.textContent = 'Todavía no hay una tarifa configurada para este cliente (botón "Tarifa" en Historial, o "Configurar tarifa" acá).';
+      box.textContent = 'Todavía no hay una tarifa configurada para este cliente (botón "Tarifa" en Historial, o "Configurar tarifa" aquí).';
       return;
     }
 
@@ -1400,7 +1407,7 @@ document.getElementById('btnEnviarCampanaEmpresa').addEventListener('click', asy
   const fechaProgramada = document.getElementById('inputFechaProgramadaEmpresa').value;
 
   if (!template_nombre) {
-    alert('Escribí el nombre exacto de la plantilla');
+    alert('Escribe el nombre exacto de la plantilla');
     return;
   }
   if (contacto_ids.length === 0) {
@@ -1410,7 +1417,7 @@ document.getElementById('btnEnviarCampanaEmpresa').addEventListener('click', asy
   const flowBoton = document.getElementById('checkFlowBotonEmpresa').checked;
   const flowActionData = leerFlowActionData(document.getElementById('inputFlowActionDataEmpresa'));
   if (flowBoton && !flowActionData.ok) {
-    alert('El JSON de "Datos para la primera pantalla del formulario" no es válido. Dejalo vacío si no lo necesitás.');
+    alert('El JSON de "Datos para la primera pantalla del formulario" no es válido. Déjalo vacío si no lo necesitas.');
     return;
   }
   const confirmacion = individual
@@ -1580,7 +1587,7 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
   const fechaProgramada = document.getElementById('inputFechaProgramada').value;
 
   if (!template_nombre) {
-    alert('Escribí el nombre exacto de la plantilla');
+    alert('Escribe el nombre exacto de la plantilla');
     return;
   }
   if (contacto_ids.length === 0) {
@@ -1590,7 +1597,7 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
   const flowBoton = document.getElementById('checkFlowBoton').checked;
   const flowActionData = leerFlowActionData(document.getElementById('inputFlowActionData'));
   if (flowBoton && !flowActionData.ok) {
-    alert('El JSON de "Datos para la primera pantalla del formulario" no es válido. Dejalo vacío si no lo necesitás.');
+    alert('El JSON de "Datos para la primera pantalla del formulario" no es válido. Déjalo vacío si no lo necesitas.');
     return;
   }
 
@@ -1624,7 +1631,7 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
 function mostrarModalCuota({ disponibles, categoria, onEnviarParcial }) {
   const modal = document.getElementById('modalCuotaPlan');
   document.getElementById('modalCuotaPlanTexto').textContent =
-    `Te quedan ${disponibles} mensaje(s) disponibles este mes en tu plan. Podés recargar tu plan o enviar solo a esos ${disponibles} contactos.`;
+    `Te quedan ${disponibles} mensaje(s) disponibles este mes en tu plan. Puedes recargar tu plan o enviar solo a esos ${disponibles} contactos.`;
 
   const btnEnviar = document.getElementById('modalCuotaPlanEnviar');
   btnEnviar.textContent = disponibles > 0 ? `Enviar a ${disponibles}` : 'Enviar mensajes';
@@ -1696,6 +1703,7 @@ async function continuarEnvioCampana(contacto_ids, { template_nombre, idioma, in
     }
 
     btn.classList.remove('is-loading');
+    if (guia.activa) refrescarDatosGuia();
 
     if (individual) {
       box.classList.add(data.omitidos.length > 0 ? 'error' : 'ok');
@@ -1707,7 +1715,7 @@ async function continuarEnvioCampana(contacto_ids, { template_nombre, idioma, in
       btn.disabled = false;
     } else if (data.programada) {
       box.classList.add('ok');
-      box.textContent = `Campaña programada para ${new Date(fechaProgramada).toLocaleString('es-CO')}. Se mandará sola llegado el momento — revisá "Historial".`;
+      box.textContent = `Campaña programada para ${new Date(fechaProgramada).toLocaleString('es-CO')}. Se mandará sola llegado el momento — revisa "Historial".`;
       btn.disabled = false;
     } else {
       pollProgresoCampana(data.campana_id, data.total, box, btn);
@@ -1855,7 +1863,7 @@ async function pollProgresoCampana(campanaId, total, box, btn, paramsCliente = '
     if (c.estado === 'completada') {
       clearInterval(interval);
       box.classList.add(c.fallidos > 0 ? 'error' : 'ok');
-      box.textContent = `Listo. ✓ ${c.enviados} enviados, ✕ ${c.fallidos} fallidos de ${total}. Revisá el detalle en "Historial".`;
+      box.textContent = `Listo. ✓ ${c.enviados} enviados, ✕ ${c.fallidos} fallidos de ${total}. Revisa el detalle en "Historial".`;
       btn.disabled = false;
       refrescarEstadoCobro();
     }
@@ -2520,7 +2528,7 @@ document.getElementById('btnGenerarFactura').addEventListener('click', async () 
   if (ids.length === 0) return;
 
   if (!facturacionConfig || !(facturacionConfig.tarifa_por_mensaje > 0)) {
-    mostrarResultadoFacturacion('Configurá primero la tarifa por mensaje (botón "Tarifa").', 'error');
+    mostrarResultadoFacturacion('Configura primero la tarifa por mensaje (botón "Tarifa").', 'error');
     document.getElementById('btnConfigTarifa').click();
     return;
   }
@@ -2596,7 +2604,7 @@ function renderFacturas(facturas) {
   if (facturas.length === 0) {
     tbody.innerHTML = `
       <tr><td colspan="8">
-        <div class="empty-state">Todavía no emitiste facturas. Seleccioná campañas arriba y usá "Generar factura".</div>
+        <div class="empty-state">Todavía no emitiste facturas. Selecciona campañas arriba y usa "Generar factura".</div>
       </td></tr>
     `;
     return;
@@ -2673,7 +2681,7 @@ function renderLeads(leads) {
       <tr><td colspan="7">
         <div class="empty-state">
           ${ICONO_LEADS_VACIO}
-          <div>Todavía no hay leads. Buscá un rubro y una ciudad arriba.</div>
+          <div>Todavía no hay leads. Busca un rubro y una ciudad arriba.</div>
         </div>
       </td></tr>
     `;
@@ -2789,6 +2797,10 @@ async function cargarConversaciones() {
   const data = await res.json();
   renderConversaciones(data.conversaciones);
   actualizarBadgeWebhook(data.conversaciones);
+  if (guia.activa) {
+    guia.conversaciones = data.conversaciones;
+    actualizarGuia();
+  }
 }
 
 function actualizarBadgeWebhook(conversaciones) {
@@ -2807,14 +2819,19 @@ function renderConversaciones(conversaciones) {
   document.getElementById('totalConversaciones').textContent = conversaciones.length;
 
   if (conversaciones.length === 0) {
-    cont.innerHTML = `<div class="empty-state">${ICONO_CONVERSACIONES_VACIO}<div>Todavía no llegaron mensajes al webhook.</div></div>`;
+    cont.innerHTML = esClienteAdmin
+      ? `<div class="empty-state">${ICONO_CONVERSACIONES_VACIO}<div>Todavía no han llegado mensajes al webhook.</div></div>`
+      : `<div class="empty-state">${ICONO_CONVERSACIONES_VACIO}
+          <div>Todavía no te han respondido. Cuando alguien responda una de tus campañas, la conversación aparece aquí.</div>
+          <button type="button" class="btn btn-sm btn-outline" data-ir-a="campana" style="margin-top: 12px;">Enviar una campaña</button>
+        </div>`;
     return;
   }
 
   cont.innerHTML = '';
   conversaciones.forEach((c) => {
     const nombreMostrar = c.nombre || c.telefono;
-    const prefijo = c.ultimo_direccion === 'saliente' ? 'Vos: ' : '';
+    const prefijo = c.ultimo_direccion === 'saliente' ? 'Tú: ' : '';
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'conv-item' + (c.telefono === conversacionActual ? ' active' : '');
@@ -3074,7 +3091,7 @@ document.getElementById('formSolicitudPlantilla').addEventListener('submit', asy
     if (!res.ok) throw new Error(data.error || 'No se pudo enviar la solicitud');
 
     box.classList.add('ok');
-    box.textContent = 'Solicitud enviada — te avisamos acá mismo cuando cambie de estado.';
+    box.textContent = 'Solicitud enviada — te avisamos aquí mismo cuando cambie de estado.';
     e.target.reset();
     botonesPlantilla = [];
     renderBotonesPlantilla();
@@ -3116,7 +3133,18 @@ async function cargarMisPlantillas() {
       <td><span class="estado-pill estado-${p.estado}">${ETIQUETAS_ESTADO_PLANTILLA[p.estado] || p.estado}</span></td>
       <td>${new Date(p.creado_en).toLocaleDateString('es-CO')}</td>
     </tr>
-  `).join('') || '<tr><td colspan="5" class="muted">Todavía no pediste ninguna plantilla.</td></tr>';
+  `).join('') || `<tr><td colspan="5">
+      <div class="empty-state">
+        <div>Todavía no has pedido ninguna plantilla. Completa el formulario de arriba para pedir la primera.</div>
+        <button type="button" class="btn btn-sm btn-outline" data-ir-form-plantilla style="margin-top: 12px;">Pedir mi primera plantilla</button>
+      </div>
+    </td></tr>`;
+
+  if (guia.activa) {
+    guia.plantillas = data.solicitudes;
+    actualizarDatalistPlantillas(guia.plantillas);
+    actualizarGuia();
+  }
 }
 
 /** Números ya conectados por el admin — misma fuente que la pestaña Webhook. */
@@ -3211,6 +3239,222 @@ document.getElementById('btnCerrarDetalleSolicitud').addEventListener('click', (
 });
 
 renderBotonesPlantilla();
+
+// ==================== GUÍA DE PRIMEROS PASOS (empresas independientes) ====================
+// Checklist global arriba del panel + "¿Cómo funciona?" plegable por pestaña.
+// Todo se calcula en el navegador con endpoints que ya existen; el admin no
+// la ve. Preferencias (minimizada/oculta/secciones plegadas) en localStorage,
+// siempre con try/catch porque puede no estar disponible.
+
+const GUIA_KEYS = { minimizada: 'dl-guia-minimizada', oculta: 'dl-guia-oculta', completada: 'dl-guia-completada' };
+function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch { /* sin storage: la guía igual funciona */ } }
+
+const guia = { activa: false, conectado: false, plantillas: [], campanas: [], conversaciones: [] };
+
+const GUIA_ICONO_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>';
+const GUIA_ICONO_RELOJ = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
+const GUIA_ICONO_CANDADO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
+
+/** Cambia de pestaña reusando el handler de tabs existente (ver TABS arriba). */
+function irAPestana(tab) {
+  const btn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
+  if (!btn || btn.classList.contains('hidden')) return;
+  btn.click();
+  window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+}
+
+async function iniciarGuia(conectado) {
+  guia.activa = true;
+  guia.conectado = conectado;
+  document.querySelectorAll('.guia-seccion').forEach(prepararGuiaSeccion);
+
+  const panel = document.getElementById('guiaPrimerosPasos');
+  if (lsGet(GUIA_KEYS.oculta) !== '1' && lsGet(GUIA_KEYS.completada) !== '1') {
+    panel.classList.remove('hidden');
+    aplicarGuiaMinimizada(lsGet(GUIA_KEYS.minimizada) === '1');
+  }
+  await refrescarDatosGuia();
+}
+
+async function refrescarDatosGuia() {
+  const traer = (url) => fetch(url).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  const [p, c, v] = await Promise.all([traer('/api/plantillas'), traer('/api/campanas'), traer('/api/conversaciones')]);
+  guia.plantillas = p?.solicitudes || [];
+  guia.campanas = c?.campanas || [];
+  guia.conversaciones = v?.conversaciones || [];
+  actualizarDatalistPlantillas(guia.plantillas);
+  actualizarGuia();
+}
+
+function aplicarGuiaMinimizada(minimizada) {
+  const panel = document.getElementById('guiaPrimerosPasos');
+  const btn = document.getElementById('btnGuiaMinimizar');
+  panel.classList.toggle('minimizada', minimizada);
+  btn.textContent = minimizada ? 'Continuar' : 'Minimizar';
+  btn.setAttribute('aria-expanded', String(!minimizada));
+}
+
+function actualizarGuia() {
+  if (!guia.activa) return;
+  const panel = document.getElementById('guiaPrimerosPasos');
+  if (panel.classList.contains('hidden')) return;
+
+  const aprobada = guia.plantillas.some((p) => p.estado === 'lista_para_enviar');
+  const bloqueoTexto = 'Disponible cuando tengas tu número de WhatsApp asignado.';
+  const pasos = [
+    {
+      titulo: 'Pide tu primera plantilla',
+      hecho: guia.plantillas.length > 0,
+      detalle: guia.plantillas.length === 0
+        ? 'Es el mensaje que vas a enviar; Meta tiene que aprobarlo.'
+        : aprobada ? 'Aprobada: ya la puedes usar.' : 'En revisión: te avisamos cuando esté lista.',
+      accion: { texto: 'Ir a Plantillas', tab: 'plantillas' },
+    },
+    {
+      titulo: 'Número de WhatsApp asignado',
+      hecho: guia.conectado,
+      espera: !guia.conectado,
+      detalle: guia.conectado ? 'Listo.' : 'Nuestro equipo te lo asigna cuando aprobamos tu plantilla. No tienes que hacer nada.',
+    },
+    {
+      titulo: 'Activa tu plan',
+      hecho: Boolean(misPlan?.aplica),
+      detalle: misPlan?.aplica ? `Plan ${misPlan.plan.nombre}.` : 'Elige cuántos mensajes al mes necesitas.',
+      accion: { texto: 'Ver planes', href: '/planes.html' },
+    },
+    {
+      titulo: 'Carga tus contactos',
+      hecho: contactos.length > 0,
+      bloqueado: !guia.conectado,
+      detalle: contactos.length > 0 ? `${contactos.length} contacto(s) cargado(s).` : 'Importa un archivo CSV o Excel con tus clientes.',
+      accion: { texto: 'Ir a Contactos', tab: 'contactos' },
+    },
+    {
+      titulo: 'Envía tu primera campaña',
+      hecho: guia.campanas.length > 0,
+      bloqueado: !guia.conectado,
+      detalle: guia.campanas.length > 0 ? 'Listo.' : 'Elige la plantilla y los contactos, y envía.',
+      accion: { texto: 'Ir a Nueva campaña', tab: 'campana' },
+    },
+    {
+      titulo: 'Revisa las respuestas',
+      hecho: guia.conversaciones.length > 0,
+      bloqueado: !guia.conectado,
+      detalle: guia.conversaciones.length > 0 ? 'Ya te respondieron.' : 'Aparecen aquí cuando alguien responde tu campaña.',
+      accion: { texto: 'Ir a Webhook', tab: 'webhook' },
+    },
+  ];
+
+  const hechos = pasos.filter((p) => p.hecho).length;
+  document.getElementById('guiaConteo').textContent = `${hechos} de ${pasos.length}`;
+  document.getElementById('guiaBarraRelleno').style.width = `${(hechos / pasos.length) * 100}%`;
+  document.querySelector('#guiaPrimerosPasos .guia-barra').setAttribute('aria-valuenow', String(hechos));
+
+  document.getElementById('guiaPasos').innerHTML = pasos.map((p, i) => {
+    let icono = String(i + 1);
+    let estadoSr = 'Pendiente';
+    if (p.hecho) { icono = GUIA_ICONO_CHECK; estadoSr = 'Completado'; }
+    else if (p.espera) { icono = GUIA_ICONO_RELOJ; estadoSr = 'En espera'; }
+    else if (p.bloqueado) { icono = GUIA_ICONO_CANDADO; estadoSr = 'Bloqueado'; }
+
+    let accion = '';
+    if (!p.hecho && !p.bloqueado && p.accion) {
+      accion = p.accion.href
+        ? `<a class="btn btn-sm btn-outline guia-paso-accion" href="${p.accion.href}" target="_blank" rel="noopener">${p.accion.texto} →</a>`
+        : `<button type="button" class="btn btn-sm btn-outline guia-paso-accion" data-ir-a="${p.accion.tab}">${p.accion.texto} →</button>`;
+    }
+    return `
+      <li class="guia-paso${p.hecho ? ' hecho' : ''}">
+        <span class="guia-paso-icono">${icono}</span>
+        <div class="guia-paso-texto">
+          <div class="guia-paso-titulo"><span class="sr-only">${estadoSr}: </span>${p.titulo}</div>
+          <div class="guia-paso-detalle">${p.bloqueado && !p.hecho ? bloqueoTexto : p.detalle}</div>
+        </div>
+        ${accion}
+      </li>`;
+  }).join('');
+
+  const completa = hechos === pasos.length;
+  document.getElementById('guiaListo').classList.toggle('hidden', !completa);
+  if (completa) lsSet(GUIA_KEYS.completada, '1');
+}
+
+/** "¿Cómo funciona esta sección?": abierto la primera vez, después recuerda lo que eligió el usuario. */
+function prepararGuiaSeccion(det) {
+  const clave = `dl-guia-seccion-${det.dataset.guia}`;
+  det.classList.remove('hidden');
+  det.open = lsGet(clave) !== '0';
+  det.addEventListener('toggle', () => lsSet(clave, det.open ? '1' : '0'));
+}
+
+/** Sugiere en "Nueva campaña" las plantillas ya aprobadas, y completa el idioma al elegir una. */
+function actualizarDatalistPlantillas(plantillas) {
+  const aprobadas = plantillas.filter((p) => p.estado === 'lista_para_enviar');
+  document.getElementById('plantillasAprobadas').innerHTML = aprobadas
+    .map((p) => `<option value="${escapeHtml(p.nombre)}">${escapeHtml(`${p.categoria} · ${p.idioma}`)}</option>`)
+    .join('');
+  guia.plantillasAprobadas = aprobadas;
+}
+
+document.getElementById('templateNombre').addEventListener('change', (e) => {
+  const elegida = (guia.plantillasAprobadas || []).find((p) => p.nombre === e.target.value.trim());
+  if (elegida?.idioma) document.getElementById('templateIdioma').value = elegida.idioma;
+});
+
+/** CSV de ejemplo con las columnas que entiende la importación (ver /api/contactos/importar). */
+function descargarCsvEjemplo() {
+  const enDias = (n) => {
+    const d = new Date(Date.now() + n * 86400000);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} 09:00`;
+  };
+  const filas = [
+    'telefono,nombre,fecha_cita,fecha_envio',
+    `3001234567,Ana Gómez,Martes 10:00 am,${enDias(7)}`,
+    `3109876543,Carlos Pérez,Miércoles 3:00 pm,${enDias(8)}`,
+    '3205551234,Laura Díaz,,',
+  ];
+  const blob = new Blob(['﻿' + filas.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'ejemplo-contactos.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+document.getElementById('btnGuiaMinimizar').addEventListener('click', () => {
+  const minimizada = !document.getElementById('guiaPrimerosPasos').classList.contains('minimizada');
+  aplicarGuiaMinimizada(minimizada);
+  lsSet(GUIA_KEYS.minimizada, minimizada ? '1' : '0');
+});
+
+document.getElementById('btnGuiaOcultar').addEventListener('click', () => {
+  document.getElementById('guiaPrimerosPasos').classList.add('hidden');
+  lsSet(GUIA_KEYS.oculta, '1');
+});
+
+// Acciones de la guía y de los empty states (delegado: esos botones se re-renderizan).
+document.addEventListener('click', (e) => {
+  const irA = e.target.closest('[data-ir-a]');
+  if (irA) { irAPestana(irA.dataset.irA); return; }
+
+  if (e.target.closest('[data-descargar-ejemplo]')) { descargarCsvEjemplo(); return; }
+
+  if (e.target.closest('[data-ir-importar]')) {
+    irAPestana('contactos');
+    document.getElementById('formImportar').scrollIntoView({ block: 'center' });
+    document.getElementById('inputArchivo').focus();
+    return;
+  }
+
+  if (e.target.closest('[data-ir-form-plantilla]')) {
+    document.getElementById('formSolicitudPlantilla').scrollIntoView({ block: 'start' });
+    document.getElementById('inputPlantillaNombre').focus();
+  }
+});
 
 // ==================== INIT ====================
 

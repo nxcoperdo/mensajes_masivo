@@ -48,10 +48,10 @@
 
   <!-- ===================== PANTALLA: CONECTAR WHATSAPP ===================== -->
   <div id="pantallaConectar" class="connect-shell hidden">
-    <h2>Conectá tu WhatsApp Business</h2>
+    <h2>Conecta tu WhatsApp Business</h2>
     <p class="muted">
-      Para empezar a mandar campañas necesitás vincular tu propia cuenta de WhatsApp Business.
-      Se abre una ventana de Meta donde autorizás la conexión — no compartimos tus credenciales.
+      Para empezar a mandar campañas necesitas vincular tu propia cuenta de WhatsApp Business.
+      Se abre una ventana de Meta donde autorizas la conexión — no compartimos tus credenciales.
     </p>
     <div class="card">
       <button type="button" id="btnConectarWhatsApp" class="btn btn-primary btn-lg" style="width: 100%; justify-content: center;">
@@ -103,14 +103,31 @@
   </nav>
 
   <main id="appMain">
+    <!-- Guía de primeros pasos (solo empresas independientes) — la arma app.js (actualizarGuia) -->
+    <section id="guiaPrimerosPasos" class="guia hidden" aria-labelledby="guiaTitulo">
+      <div class="guia-header">
+        <div class="guia-titulo-wrap">
+          <h2 id="guiaTitulo" class="guia-titulo">Primeros pasos <span id="guiaConteo" class="guia-conteo">0 de 6</span></h2>
+          <div class="guia-barra" role="progressbar" aria-labelledby="guiaTitulo" aria-valuemin="0" aria-valuemax="6" aria-valuenow="0">
+            <span id="guiaBarraRelleno" class="guia-barra-relleno"></span>
+          </div>
+        </div>
+        <button type="button" id="btnGuiaMinimizar" class="btn btn-sm btn-outline" aria-expanded="true" aria-controls="guiaCuerpo">Minimizar</button>
+      </div>
+      <div id="guiaCuerpo" class="guia-cuerpo">
+        <ol id="guiaPasos" class="guia-pasos"></ol>
+        <p id="guiaListo" class="guia-listo hidden">¡Listo, ya estás usando Daemon Leads! Esta guía se va a ocultar la próxima vez que entres.</p>
+        <button type="button" id="btnGuiaOcultar" class="guia-ocultar">Ocultar guía</button>
+      </div>
+    </section>
     <!-- ===================== TAB: EMPRESAS (solo admin) ===================== -->
     <section id="tab-empresas" class="tab-panel">
       <div id="empresasListado">
         <div class="card">
           <h2>Crear empresa nueva</h2>
           <p class="muted">Una empresa (ej: una odontología) no se loguea ni conecta su propio WhatsApp — es un
-            espacio propio dentro de tu panel: vos le subís los contactos, le elegís con cuál de tus números
-            enviar, y armás sus campañas desde "Gestionar".</p>
+            espacio propio dentro de tu panel: tú le subes los contactos, le eliges con cuál de tus números
+            enviar, y armas sus campañas desde "Gestionar".</p>
           <form id="formCrearEmpresa" class="inline-form">
             <div class="field">
               <label for="inputEmpresaNombre" class="sr-only">Nombre del negocio</label>
@@ -145,7 +162,7 @@
           <h2>Empresas independientes (<span id="totalClientesIndependientes">0</span>)</h2>
           <p class="muted">
             Cuentas que se registraron solas desde la pantalla de registro — manejan sus propios contactos,
-            campañas y plantillas desde su panel. Acá solo les asignás uno de tus números conectados; sin eso
+            campañas y plantillas desde su panel. Aquí solo les asignas uno de tus números conectados; sin eso
             no pueden mandar campañas aunque ya tengan una plantilla "lista para enviar".
           </p>
           <div class="table-wrap">
@@ -231,7 +248,7 @@
           <h2 style="margin-top: 14px;" id="empresaDetalleNombre"></h2>
 
           <h3>Número de WhatsApp para esta empresa</h3>
-          <p class="muted">Elegí uno de los números que ya conectaste en la pestaña "Webhook".</p>
+          <p class="muted">Elige uno de los números que ya conectaste en la pestaña "Webhook".</p>
           <form id="formNumeroEmpresa" class="inline-form">
             <div class="field">
               <label for="selectNumeroEmpresa" class="sr-only">Número</label>
@@ -248,7 +265,7 @@
 
         <div class="card">
           <h2>Listas guardadas (<span id="totalListasEmpresa">0</span>)</h2>
-          <p class="muted">Cada importación queda guardada acá — "Usar esta lista" vuelve a seleccionar exactamente esos mismos contactos, sin reimportar el archivo.</p>
+          <p class="muted">Cada importación queda guardada aquí — "Usar esta lista" vuelve a seleccionar exactamente esos mismos contactos, sin reimportar el archivo.</p>
           <div class="table-wrap">
             <table class="tabla">
               <thead>
@@ -399,9 +416,19 @@
 
     <!-- ===================== TAB: CONTACTOS ===================== -->
     <section id="tab-contactos" class="tab-panel active">
+      <details class="guia-seccion hidden" data-guia="contactos">
+        <summary>¿Cómo funciona esta sección?</summary>
+        <ol class="guia-seccion-pasos">
+          <li><span class="section-header-badge">1</span><div><strong>Arma tu archivo.</strong> Descarga el ejemplo y complétalo con tus contactos: <code>telefono</code> y <code>nombre</code> como mínimo.</div></li>
+          <li><span class="section-header-badge">2</span><div><strong>Impórtalo.</strong> Sube el CSV o Excel aquí abajo; el teléfono se arregla solo (agrega el 57 si falta).</div></li>
+          <li><span class="section-header-badge">3</span><div><strong>Elige a quién mandarle.</strong> Marca los contactos (o "Seleccionar todos" / por lotes) y pasa a <em>Nueva campaña</em>.</div></li>
+        </ol>
+        <p class="guia-seccion-tip">Tip: cualquier columna extra (ej. <code>fecha_cita</code>) la puedes usar después como variable dentro del mensaje.</p>
+      </details>
+
       <div class="card">
         <h2>Importar contactos (CSV o Excel)</h2>
-        <p class="muted">Columnas esperadas: <code>telefono</code> y <code>nombre</code> (podés usar <code>phone</code>/<code>numero</code>/<code>name</code> también). El teléfono se normaliza solo (agrega el 57 de Colombia si falta). Formatos aceptados: <code>.csv</code>, <code>.xlsx</code>, <code>.xls</code>.</p>
+        <p class="muted">Columnas esperadas: <code>telefono</code> y <code>nombre</code> (puedes usar <code>phone</code>/<code>numero</code>/<code>name</code> también). El teléfono se normaliza solo (agrega el 57 de Colombia si falta). Formatos aceptados: <code>.csv</code>, <code>.xlsx</code>, <code>.xls</code>.</p>
         <p class="muted">Cualquier otra columna (ej: <code>fecha_cita</code>, <code>hora</code>, <code>servicio</code>) queda disponible como variable de plantilla al armar la campaña. Una columna <code>fecha_envio</code> programa el recordatorio individual de ese contacto (pestaña "Nueva campaña", opción "Fecha individual por contacto").</p>
         <form id="formImportar">
           <div class="file-picker">
@@ -409,10 +436,14 @@
             <span class="file-picker-name" id="inputArchivoNombre">Ningún archivo seleccionado</span>
           </div>
           <input type="file" name="archivo" id="inputArchivo" accept=".csv,.xlsx,.xls" required class="sr-only" />
-          <div class="send-bar" style="margin-top: 14px; padding-top: 0; border-top: none;">
+          <div class="send-bar" style="margin-top: 14px; padding-top: 0; border-top: none; display: flex; flex-wrap: wrap; gap: 10px;">
             <button type="submit" class="btn btn-primary">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M17 8l-5-5-5 5" /><path d="M12 3v12" /></svg>
               Importar
+            </button>
+            <button type="button" class="btn btn-outline" data-descargar-ejemplo>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M7 10l5 5 5-5" /><path d="M12 15V3" /></svg>
+              Descargar ejemplo
             </button>
           </div>
         </form>
@@ -421,7 +452,7 @@
 
       <div class="card">
         <h2>Listas guardadas (<span id="totalListas">0</span>)</h2>
-        <p class="muted">Cada importación queda guardada acá — "Usar esta lista" vuelve a seleccionar exactamente esos mismos contactos, sin reimportar el archivo.</p>
+        <p class="muted">Cada importación queda guardada aquí — "Usar esta lista" vuelve a seleccionar exactamente esos mismos contactos, sin reimportar el archivo.</p>
         <div class="table-wrap">
           <table class="tabla">
             <thead>
@@ -505,9 +536,20 @@
 
     <!-- ===================== TAB: NUEVA CAMPAÑA ===================== -->
     <section id="tab-campana" class="tab-panel">
+      <details class="guia-seccion hidden" data-guia="campana">
+        <summary>¿Cómo funciona esta sección?</summary>
+        <ol class="guia-seccion-pasos">
+          <li><span class="section-header-badge">1</span><div><strong>Elige una plantilla aprobada.</strong> Solo puedes usar plantillas en estado "Lista para enviar" (pestaña <em>Plantillas</em>). El nombre se autocompleta.</div></li>
+          <li><span class="section-header-badge">2</span><div><strong>Completa los parámetros.</strong> Si tu plantilla tiene <code>{{1}}</code>, <code>{{2}}</code>…, indica qué va en cada uno (el nombre del contacto, un dato del archivo o un texto fijo).</div></li>
+          <li><span class="section-header-badge">3</span><div><strong>Envíala o prográmala.</strong> Sin fecha sale en el momento; con fecha, se envía sola ese día.</div></li>
+        </ol>
+        <p class="guia-seccion-tip">Tip: cada mensaje enviado descuenta 1 de tu plan del mes. Los que fallan no se cobran.</p>
+      </details>
+
       <div id="alertContactosCampana" class="alert-box">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
-        <span><strong id="campanaContactosCount">0</strong> contactos seleccionados en la pestaña "Contactos". Si no seleccionaste ninguno, andá a esa pestaña primero.</span>
+        <span><strong id="campanaContactosCount">0</strong> contactos seleccionados en la pestaña "Contactos". Si no seleccionaste ninguno, ve a esa pestaña primero.</span>
+        <button type="button" class="alert-accion" data-ir-a="contactos">Ir a Contactos →</button>
       </div>
 
       <div class="card">
@@ -515,14 +557,15 @@
           <span class="section-header-badge">1</span>
           <div>
             <h3>Plantilla de WhatsApp</h3>
-            <p>Usá el nombre exacto tal cual está aprobado en Meta.</p>
+            <p>Usa el nombre exacto tal cual está aprobado en Meta.</p>
           </div>
         </div>
 
         <div class="field-grid-2">
           <div>
             <label for="templateNombre">Nombre de la plantilla</label>
-            <input type="text" id="templateNombre" placeholder="ej: puntos_nuevos_premios" autocomplete="off" />
+            <input type="text" id="templateNombre" placeholder="ej: puntos_nuevos_premios" autocomplete="off" list="plantillasAprobadas" />
+            <datalist id="plantillasAprobadas"></datalist>
           </div>
           <div>
             <label for="templateIdioma">Idioma</label>
@@ -552,7 +595,7 @@
           <span class="section-header-badge">2</span>
           <div>
             <h3>Parámetros de la plantilla ({{1}}, {{2}}, …)</h3>
-            <p>Agregá uno por cada <code>{{N}}</code> que tenga tu plantilla, en orden.</p>
+            <p>Agrega uno por cada <code>{{N}}</code> que tenga tu plantilla, en orden.</p>
           </div>
         </div>
 
@@ -588,7 +631,7 @@
           <p id="notaCostoCampana">El costo por mensaje varía si la plantilla lleva imagen o video adjunto (arriba). El estimado es en pesos, sin IVA — el 19% se muestra aparte como referencia, no se descuenta del saldo.</p>
         </div>
 
-        <div class="costo-box" id="estimadoCreditosCampana">Elegí una categoría para ver el costo estimado.</div>
+        <div class="costo-box" id="estimadoCreditosCampana">Elige una categoría para ver el costo estimado.</div>
       </div>
 
       <div class="card">
@@ -617,7 +660,7 @@
       <div class="card send-bar-card">
         <div>
           <h4>¿Todo listo?</h4>
-          <p>Revisá los contactos seleccionados antes de enviar.</p>
+          <p>Revisa los contactos seleccionados antes de enviar.</p>
         </div>
         <button id="btnEnviarCampana" class="btn btn-primary btn-lg">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg>
@@ -635,7 +678,7 @@
           <div class="header-actions">
             <div id="selectorClienteFacturar" class="field hidden">
               <label for="clienteFacturar" class="sr-only">Cliente a facturar</label>
-              <select id="clienteFacturar" title="Elegí de qué cliente ver las campañas"></select>
+              <select id="clienteFacturar" title="Elige de qué cliente ver las campañas"></select>
             </div>
             <span id="campanasSeleccionadasCount" class="muted">0 seleccionadas</span>
             <button type="button" id="btnSeleccionarCampanas" class="btn btn-sm btn-outline">Seleccionar todas</button>
@@ -813,13 +856,13 @@
           <div class="header-actions">
             <div class="field">
               <label for="selectEncuesta" class="sr-only">Campaña de formulario</label>
-              <select id="selectEncuesta" title="Elegí una campaña de formulario"></select>
+              <select id="selectEncuesta" title="Elige una campaña de formulario"></select>
             </div>
             <button type="button" id="btnRefrescarEncuesta" class="btn btn-sm btn-outline">Actualizar</button>
             <button type="button" id="btnDescargarRespuestasCsv" class="btn btn-sm btn-outline hidden">Descargar CSV</button>
           </div>
         </div>
-        <p class="muted">Solo aparecen acá las campañas enviadas con la opción "La plantilla abre un formulario (Flow)". Las respuestas llegan por el webhook a medida que la gente completa el formulario.</p>
+        <p class="muted">Solo aparecen aquí las campañas enviadas con la opción "La plantilla abre un formulario (Flow)". Las respuestas llegan por el webhook a medida que la gente completa el formulario.</p>
         <div id="encuestaVacia" class="empty-state hidden">Todavía no hay campañas de formulario enviadas.</div>
         <div id="encuestaResumen" class="hidden">
           <div class="kpi-grid">
@@ -844,6 +887,16 @@
 
     <!-- ===================== TAB: PLANTILLAS (pedido a Code Repair Tech) ===================== -->
     <section id="tab-plantillas" class="tab-panel">
+      <details class="guia-seccion hidden" data-guia="plantillas">
+        <summary>¿Cómo funciona esta sección?</summary>
+        <ol class="guia-seccion-pasos">
+          <li><span class="section-header-badge">1</span><div><strong>Arma tu plantilla.</strong> Completa el formulario "Nueva solicitud de plantilla" con el texto que quieres mandar. WhatsApp solo permite enviar mensajes masivos con plantillas aprobadas por Meta.</div></li>
+          <li><span class="section-header-badge">2</span><div><strong>Nosotros la mandamos a Meta.</strong> Sigue el estado en "Mis solicitudes": <em>Pendiente</em> (la estamos revisando), <em>Esperando confirmación</em> (la está aprobando Meta), <em>Lista para enviar</em> (aprobada) o <em>Rechazada</em> (te contamos por qué).</div></li>
+          <li><span class="section-header-badge">3</span><div><strong>Úsala.</strong> Cuando esté "Lista para enviar", ve a <em>Nueva campaña</em> y elígela por su nombre.</div></li>
+        </ol>
+        <p class="guia-seccion-tip">Tip: si todavía no tienes número de WhatsApp, te lo asignamos cuando aprobemos tu primera plantilla.</p>
+      </details>
+
       <div id="cardMiPlan" class="card hidden">
         <h2>Tu plan</h2>
         <p class="muted">Cuota fija de mensajes/mes — se resetea cada mes en el aniversario de cuando te lo activaron. Imagen y video cuentan igual que texto.</p>
@@ -870,17 +923,17 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18M8 4v6" /></svg>
         </div>
         <div class="numero-personalizado-texto">
-          <h3>Todavía no tenés un plan activo</h3>
-          <p class="muted">Sin plan (ni créditos cargados) no podés mandar campañas. Elegí el que más se ajuste a tu volumen y escribinos para activarlo.</p>
+          <h3>Todavía no tienes un plan activo</h3>
+          <p class="muted">Sin plan (ni créditos cargados) no puedes mandar campañas. Elige el que más se ajuste a tu volumen y escríbenos para activarlo.</p>
         </div>
         <a href="/planes.html" target="_blank" rel="noopener" class="numero-personalizado-cta">Ver planes →</a>
       </div>
 
       <div id="avisoConectarPlantillas" class="card hidden">
         <p class="muted">
-          Todavía no tenés un número de WhatsApp asignado. Podés pedir tus plantillas igual — te asignamos un
-          número apenas la aprobemos. Si ya tenés tu propia cuenta de WhatsApp Business,
-          <button type="button" id="btnConectarDesdePlantillas" class="btn btn-sm btn-outline" style="margin-left: 4px;">conectala vos mismo</button>.
+          Todavía no tienes un número de WhatsApp asignado. Puedes pedir tus plantillas igual — te asignamos un
+          número apenas la aprobemos. Si ya tienes tu propia cuenta de WhatsApp Business,
+          <button type="button" id="btnConectarDesdePlantillas" class="btn btn-sm btn-outline" style="margin-left: 4px;">conéctala tú mismo</button>.
         </p>
       </div>
 
@@ -889,23 +942,23 @@
           <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38a9.9 9.9 0 0 0 4.74 1.21h.01c5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.86 9.86 0 0 0 12.04 2Zm5.8 14.16c-.24.68-1.4 1.3-1.94 1.38-.5.08-1.12.11-1.81-.11-.42-.13-.95-.31-1.64-.6-2.88-1.24-4.76-4.14-4.9-4.33-.14-.19-1.17-1.56-1.17-2.98 0-1.42.75-2.11 1.01-2.4.27-.29.58-.36.78-.36h.56c.18 0 .42-.07.66.5.24.58.83 2 .9 2.14.07.14.12.31.02.5-.09.19-.14.31-.28.47-.14.16-.29.36-.42.48-.14.14-.28.29-.12.57.16.28.71 1.17 1.53 1.9 1.05.94 1.94 1.23 2.22 1.37.28.14.44.12.6-.07.16-.19.68-.79.86-1.06.18-.28.36-.23.6-.14.24.09 1.55.73 1.82.86.27.14.44.2.51.32.07.12.07.68-.17 1.36Z"/></svg>
         </div>
         <div class="numero-personalizado-texto">
-          <h3>¿Querés un número de WhatsApp personalizado?</h3>
+          <h3>¿Quieres un número de WhatsApp personalizado?</h3>
           <p class="muted">
             Un número personalizado es una línea exclusiva para tu negocio, con su propio perfil de WhatsApp
             Business completo: foto, nombre, categoría, descripción, dirección y horario de atención — no
-            compartís número con otras empresas.
+            compartes número con otras empresas.
           </p>
-          <p id="sinContactoWhatsapp" class="muted hidden" style="font-size: 12px;">Todavía no configuramos un número de contacto — escribinos por otro medio mientras tanto.</p>
+          <p id="sinContactoWhatsapp" class="muted hidden" style="font-size: 12px;">Todavía no configuramos un número de contacto — escríbenos por otro medio mientras tanto.</p>
         </div>
         <a id="linkNumeroPersonalizado" href="#" target="_blank" rel="noopener" class="btn numero-personalizado-cta hidden">
-          Escribinos →
+          Escríbenos →
         </a>
       </div>
 
       <div class="card">
         <h2>Nueva solicitud de plantilla</h2>
         <p class="muted">
-          Armala igual que en el creador de plantillas de Meta. La mandamos nosotros a Meta y te avisamos acá
+          Ármala igual que en el creador de plantillas de Meta. La mandamos nosotros a Meta y te avisamos aquí
           mismo el estado (pendiente, esperando confirmación, lista para enviar, etc.).
         </p>
         <form id="formSolicitudPlantilla">
@@ -950,7 +1003,7 @@
             <input type="file" id="inputPlantillaMuestra" accept=".jpg,.jpeg,.png,.mp4,.3gp,.3gpp,.pdf" class="sr-only" />
           </div>
 
-          <label for="inputPlantillaBody">Cuerpo del mensaje <span class="muted" style="font-weight: 400;">(usá <code>{{1}}</code>, <code>{{2}}</code>… para variables)</span></label>
+          <label for="inputPlantillaBody">Cuerpo del mensaje <span class="muted" style="font-weight: 400;">(usa <code>{{1}}</code>, <code>{{2}}</code>… para variables)</span></label>
           <textarea id="inputPlantillaBody" maxlength="1024" rows="4" required></textarea>
           <p class="muted contador-caracteres" id="contadorPlantillaBody">0 / 1024</p>
 
@@ -1037,7 +1090,7 @@
         </button>
         <div id="muestraSolicitudAdmin" class="hidden"></div>
         <h2 style="margin-top: 14px;">Formato para recrear en Meta</h2>
-        <p class="muted">Copiá este JSON como referencia al crear la plantilla en el Administrador de Meta (Components).</p>
+        <p class="muted">Copia este JSON como referencia al crear la plantilla en el Administrador de Meta (Components).</p>
         <pre id="jsonSolicitudAdmin" class="result-box json-preview"></pre>
       </div>
     </section>
@@ -1049,7 +1102,7 @@
         <p class="muted">
           Busca negocios por rubro y ciudad (ej: <code>restaurantes</code> / <code>Neiva Huila</code>) y guarda
           los que tengan teléfono, con su link de WhatsApp listo. Estos leads son independientes de tus
-          contactos — nunca se les manda nada automáticamente, son solo para que los contactes vos.
+          contactos — nunca se les manda nada automáticamente, son solo para que los contactes tú.
         </p>
         <form id="formBuscarLeads" class="inline-form">
           <div class="field">
@@ -1104,10 +1157,20 @@
 
     <!-- ===================== TAB: WEBHOOK (ESTADOS Y CONVERSACIONES) ===================== -->
     <section id="tab-webhook" class="tab-panel">
+      <details class="guia-seccion hidden" data-guia="webhook">
+        <summary>¿Cómo funciona esta sección?</summary>
+        <ol class="guia-seccion-pasos">
+          <li><span class="section-header-badge">1</span><div><strong>Aquí llegan las respuestas.</strong> Cuando alguien contesta una de tus campañas, su mensaje aparece en "Conversaciones". El número verde indica mensajes sin leer.</div></li>
+          <li><span class="section-header-badge">2</span><div><strong>Responde desde aquí.</strong> Abre la conversación y escribe. Puedes mandar texto libre durante las 24 horas siguientes al último mensaje del contacto (regla de WhatsApp).</div></li>
+          <li><span class="section-header-badge">3</span><div><strong>Pasadas las 24 horas</strong>, WhatsApp solo deja escribir con una plantilla aprobada: usa <em>Nueva campaña</em> para ese contacto.</div></li>
+        </ol>
+        <p class="guia-seccion-tip">Tip: toca "Actualizar" para traer los mensajes nuevos.</p>
+      </details>
+
       <div id="cardConfigWebhook" class="card hidden">
         <h2>Configuración del webhook</h2>
         <p class="muted">
-          Configurá esta URL en Meta (tu app &gt; WhatsApp &gt; Configuration &gt; Webhook) para recibir
+          Configura esta URL en Meta (tu app &gt; WhatsApp &gt; Configuration &gt; Webhook) para recibir
           confirmaciones de estado (enviado, entregado, leído) y los mensajes que te respondan.
         </p>
         <div class="webhook-info">
@@ -1133,7 +1196,7 @@
         </div>
         <p class="muted">
           El número marcado como activo es el que se usa para mandar campañas y responder chats.
-          Si conectaste más de un número en la misma cuenta de Meta, elegí acá cuál usar.
+          Si conectaste más de un número en la misma cuenta de Meta, elige aquí cuál usar.
         </p>
         <div id="listaNumeros" class="lista-numeros">
           <div class="empty-state">Cargando…</div>
@@ -1144,7 +1207,7 @@
           <summary>Agregar a mano un número de la misma cuenta de Meta</summary>
           <p class="muted">
             Si el número nuevo ya está en la MISMA cuenta de WhatsApp Business (WABA) que la que ya conectaste,
-            no hace falta repetir el popup de Meta: pegá acá el <code>phone_number_id</code> (Meta App Dashboard
+            no hace falta repetir el popup de Meta: pega aquí el <code>phone_number_id</code> (Meta App Dashboard
             &gt; WhatsApp &gt; Configuración de la API &gt; selector "De").
           </p>
           <form id="formNumeroManual" class="numero-manual-form">
@@ -1157,8 +1220,8 @@
       <div id="cardNumeroAsignado" class="card hidden">
         <h2>Tu número de WhatsApp</h2>
         <p class="muted">
-          Este es el número desde el que mandás campañas y respondés chats. Lo asigna Code Repair Tech — si
-          necesitás cambiarlo, escribinos (pestaña "Plantillas", "¿Querés un número personalizado?").
+          Este es el número desde el que envías campañas y respondes chats. Lo asigna Code Repair Tech — si
+          necesitas cambiarlo, escríbenos (pestaña "Plantillas", "¿Quieres un número personalizado?").
         </p>
         <div id="miNumeroInfo" class="webhook-info-row">
           <span class="webhook-info-label">Número asignado</span>
@@ -1178,7 +1241,7 @@
           <div class="chat-panel">
             <div id="chatVacio" class="chat-vacio">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" /></svg>
-              <div>Elegí una conversación de la izquierda para ver los mensajes y responder.</div>
+              <div>Elige una conversación de la izquierda para ver los mensajes y responder.</div>
             </div>
             <div id="chatActivo" class="chat-activo hidden">
               <div class="chat-header">
@@ -1187,8 +1250,8 @@
               </div>
               <div id="chatMensajes" class="chat-mensajes"></div>
               <form id="formResponder" class="chat-input-bar">
-                <label for="inputRespuesta" class="sr-only">Escribí una respuesta</label>
-                <input type="text" id="inputRespuesta" placeholder="Escribí una respuesta…" autocomplete="off" />
+                <label for="inputRespuesta" class="sr-only">Escribe una respuesta</label>
+                <input type="text" id="inputRespuesta" placeholder="Escribe una respuesta…" autocomplete="off" />
                 <button type="submit" class="btn btn-primary">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg>
                   Enviar

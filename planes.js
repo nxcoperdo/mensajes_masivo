@@ -29,7 +29,7 @@ export function obtenerPlanesCatalogo() {
 
 export function guardarPlanesCatalogo(planes) {
   if (!Array.isArray(planes) || planes.length === 0) {
-    throw new Error('Mandá al menos un plan');
+    throw new Error('Envía al menos un plan');
   }
   const normalizados = planes.map((p, i) => {
     const nombre = String(p.nombre || '').trim();

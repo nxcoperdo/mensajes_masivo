@@ -68,7 +68,7 @@ function mensajeErrorMeta(data, status) {
 export async function subirMedia(buffer, mimetype, phoneNumberId, accessToken) {
   const config = getConfig(phoneNumberId, accessToken);
   if (!config) {
-    return { ok: false, error: 'WhatsApp no configurado para este cliente (conectá tu cuenta de WhatsApp Business)' };
+    return { ok: false, error: 'WhatsApp no configurado para este cliente (conecta tu cuenta de WhatsApp Business)' };
   }
 
   const form = new FormData();
@@ -121,7 +121,7 @@ export async function subirMedia(buffer, mimetype, phoneNumberId, accessToken) {
 export async function sendTemplate({ to, template, languageCode, parameters = [], phoneNumberId, accessToken, headerMediaId, headerMediaTipo, flowButton, flowToken, flowActionData, flowButtonIndex }) {
   const config = getConfig(phoneNumberId, accessToken);
   if (!config) {
-    return { ok: false, error: 'WhatsApp no configurado para este cliente (conectá tu cuenta de WhatsApp Business)' };
+    return { ok: false, error: 'WhatsApp no configurado para este cliente (conecta tu cuenta de WhatsApp Business)' };
   }
 
   const finalTo = normalizePhone(to);
@@ -196,7 +196,7 @@ export async function sendTemplate({ to, template, languageCode, parameters = []
 export async function sendTextMessage({ to, body, phoneNumberId, accessToken }) {
   const config = getConfig(phoneNumberId, accessToken);
   if (!config) {
-    return { ok: false, error: 'WhatsApp no configurado para este cliente (conectá tu cuenta de WhatsApp Business)' };
+    return { ok: false, error: 'WhatsApp no configurado para este cliente (conecta tu cuenta de WhatsApp Business)' };
   }
 
   const finalTo = normalizePhone(to);

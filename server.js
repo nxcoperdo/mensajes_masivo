@@ -55,7 +55,7 @@ const upload = multer({
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     if (!EXTENSIONES_PERMITIDAS.includes(ext)) {
-      return cb(new Error('Formato no soportado. Usá un archivo .csv, .xlsx o .xls'));
+      return cb(new Error('Formato no soportado. Usa un archivo .csv, .xlsx o .xls'));
     }
     cb(null, true);
   },
@@ -186,7 +186,7 @@ const apiLimiter = rateLimit({
   max: 300,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: 'Demasiadas solicitudes. Esperá un momento y volvé a intentar.' },
+  message: { error: 'Demasiadas solicitudes. Espera un momento y vuelve a intentar.' },
 });
 app.use('/api/', apiLimiter);
 
@@ -198,7 +198,7 @@ const authLimiter = rateLimit({
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: 'Demasiados intentos. Esperá unos minutos y volvé a intentar.' },
+  message: { error: 'Demasiados intentos. Espera unos minutos y vuelve a intentar.' },
 });
 
 function clienteActual(req) {
@@ -274,7 +274,7 @@ app.get('/api/auth/yo', (req, res) => {
 // del SDK de JS no redirige visiblemente acá (el `code` se recibe por
 // postMessage — ver public/app.js). Esta página solo cubre ese requisito.
 app.get('/oauth/callback', (req, res) => {
-  res.type('html').send('<!doctype html><html lang="es"><body style="font-family: sans-serif; padding: 2rem;"><p>Podés cerrar esta ventana.</p></body></html>');
+  res.type('html').send('<!doctype html><html lang="es"><body style="font-family: sans-serif; padding: 2rem;"><p>Puedes cerrar esta ventana.</p></body></html>');
 });
 
 // ==================== CONFIG ====================
@@ -429,7 +429,7 @@ app.post('/api/whatsapp/numeros/manual', async (req, res) => {
 
   const cliente = clienteActual(req);
   if (!cliente.access_token) {
-    return res.status(400).json({ error: 'Todavía no tenés ningún número conectado — usá "Conectar WhatsApp Business" primero' });
+    return res.status(400).json({ error: 'Todavía no tienes ningún número conectado — usa "Conectar WhatsApp Business" primero' });
   }
 
   const apiVersion = process.env.WHATSAPP_API_VERSION || 'v20.0';
@@ -878,7 +878,7 @@ app.post('/api/campanas', (req, res) => {
       return res.status(400).json({ error: 'Falta el nombre de la plantilla' });
     }
     if (!Array.isArray(contacto_ids) || contacto_ids.length === 0) {
-      return res.status(400).json({ error: 'Elegí al menos un contacto' });
+      return res.status(400).json({ error: 'Elige al menos un contacto' });
     }
     if (!isWhatsAppConfigured(cliente.phone_number_id, cliente.access_token)) {
       return res.status(400).json({ error: 'Todavía no conectaste tu cuenta de WhatsApp Business' });
@@ -906,7 +906,7 @@ app.post('/api/campanas', (req, res) => {
     if (esClienteIndependiente(cliente)) {
       categoriaPlantilla = String(req.body?.categoria_plantilla || '').toUpperCase();
       if (!CATEGORIAS_CREDITO.includes(categoriaPlantilla)) {
-        return res.status(400).json({ error: 'Elegí la categoría de la plantilla (Marketing, Utilidad o Autenticación) para calcular el costo en créditos' });
+        return res.status(400).json({ error: 'Elige la categoría de la plantilla (Marketing, Utilidad o Autenticación) para calcular el costo en créditos' });
       }
       if (clienteTienePlanActivo(cliente)) {
         // Camino plan mensual: cuota fija, sin distinguir texto/imagen/video.
@@ -926,7 +926,7 @@ app.post('/api/campanas', (req, res) => {
         // Camino créditos sueltos (recarga suelta, precios reales COP).
         const costoTotal = costoPorMensaje(categoriaPlantilla, encabezadoTipo) * contactos.length;
         if (cliente.creditos < costoTotal) {
-          return res.status(402).json({ error: `No te alcanzan los créditos: esta campaña necesita ${costoTotal} y tenés ${cliente.creditos}.` });
+          return res.status(402).json({ error: `No te alcanzan los créditos: esta campaña necesita ${costoTotal} y tienes ${cliente.creditos}.` });
         }
       }
     }
@@ -947,7 +947,7 @@ app.post('/api/campanas', (req, res) => {
         }
         if (buffer.length > MAX_VIDEO_BYTES) {
           return res.status(400).json({
-            error: 'El video supera los 16MB que permite WhatsApp. Usá uno más corto o de menor resolución.',
+            error: 'El video supera los 16MB que permite WhatsApp. Usa uno más corto o de menor resolución.',
           });
         }
       }
@@ -1305,7 +1305,7 @@ function resolverClienteObjetivo(req, idPedido) {
   const id = Number(idPedido);
   if (!Number.isInteger(id)) return { error: 'cliente_id inválido', status: 400 };
   if (id === propio.id) return { cliente: propio, propio };
-  if (!propio.es_admin) return { error: 'No tenés permiso para ver los datos de otro cliente', status: 403 };
+  if (!propio.es_admin) return { error: 'No tienes permiso para ver los datos de otro cliente', status: 403 };
 
   const objetivo = db.prepare('SELECT * FROM clientes WHERE id = ?').get(id);
   if (!objetivo) return { error: 'Cliente no encontrado', status: 404 };
@@ -1335,7 +1335,7 @@ function serializarEmpresa(cliente) {
 app.get('/api/admin/empresas', (req, res) => {
   const propio = clienteActual(req);
   if (!propio.es_admin) {
-    return res.status(403).json({ error: 'No tenés permiso para ver esta lista' });
+    return res.status(403).json({ error: 'No tienes permiso para ver esta lista' });
   }
   const empresas = db
     .prepare('SELECT * FROM clientes WHERE es_empresa_gestionada = 1 ORDER BY nombre_negocio COLLATE NOCASE ASC')
@@ -1353,7 +1353,7 @@ app.get('/api/admin/empresas', (req, res) => {
 app.post('/api/admin/empresas', (req, res) => {
   const propio = clienteActual(req);
   if (!propio.es_admin) {
-    return res.status(403).json({ error: 'No tenés permiso para crear empresas' });
+    return res.status(403).json({ error: 'No tienes permiso para crear empresas' });
   }
 
   const { nombre_negocio } = req.body || {};
@@ -1396,13 +1396,13 @@ function empresaQueYaTieneNumero(phoneNumberId, exceptoClienteId) {
 }
 
 function errorNumeroOcupado(otra) {
-  return `Ese número ya está asignado a "${otra.nombre_negocio || otra.email}". Un número solo puede ser de una empresa — desasignáselo primero.`;
+  return `Ese número ya está asignado a "${otra.nombre_negocio || otra.email}". Un número solo puede ser de una empresa — quítaselo primero.`;
 }
 
 app.patch('/api/admin/empresas/:id/numero', (req, res) => {
   const propio = clienteActual(req);
   if (!propio.es_admin) {
-    return res.status(403).json({ error: 'No tenés permiso para asignar números' });
+    return res.status(403).json({ error: 'No tienes permiso para asignar números' });
   }
 
   const empresa = db
@@ -1461,7 +1461,7 @@ function serializarClienteIndependiente(cliente) {
 app.get('/api/admin/clientes-independientes', (req, res) => {
   const propio = clienteActual(req);
   if (!propio.es_admin) {
-    return res.status(403).json({ error: 'No tenés permiso para ver esta lista' });
+    return res.status(403).json({ error: 'No tienes permiso para ver esta lista' });
   }
   const clientes = db
     .prepare(`SELECT * FROM clientes ORDER BY nombre_negocio COLLATE NOCASE ASC, email COLLATE NOCASE ASC`)
@@ -1473,7 +1473,7 @@ app.get('/api/admin/clientes-independientes', (req, res) => {
 app.patch('/api/admin/clientes-independientes/:id/numero', (req, res) => {
   const propio = clienteActual(req);
   if (!propio.es_admin) {
-    return res.status(403).json({ error: 'No tenés permiso para asignar números' });
+    return res.status(403).json({ error: 'No tienes permiso para asignar números' });
   }
 
   const cliente = db.prepare('SELECT * FROM clientes WHERE id = ?').get(req.params.id);
@@ -1512,7 +1512,7 @@ app.patch('/api/admin/clientes-independientes/:id/numero', (req, res) => {
 app.patch('/api/admin/clientes-independientes/:id/plan', (req, res) => {
   const propio = clienteActual(req);
   if (!propio.es_admin) {
-    return res.status(403).json({ error: 'No tenés permiso para asignar planes' });
+    return res.status(403).json({ error: 'No tienes permiso para asignar planes' });
   }
 
   const cliente = db.prepare('SELECT * FROM clientes WHERE id = ?').get(req.params.id);
@@ -1540,7 +1540,7 @@ app.patch('/api/admin/clientes-independientes/:id/plan', (req, res) => {
 app.post('/api/admin/clientes-independientes/:id/creditos', (req, res) => {
   const propio = clienteActual(req);
   if (!propio.es_admin) {
-    return res.status(403).json({ error: 'No tenés permiso para cargar créditos' });
+    return res.status(403).json({ error: 'No tienes permiso para cargar créditos' });
   }
 
   const cliente = db.prepare('SELECT * FROM clientes WHERE id = ?').get(req.params.id);
@@ -1564,7 +1564,7 @@ app.post('/api/admin/clientes-independientes/:id/creditos', (req, res) => {
 app.get('/api/admin/configuracion-creditos', (req, res) => {
   const propio = clienteActual(req);
   if (!propio.es_admin) {
-    return res.status(403).json({ error: 'No tenés permiso para ver esta configuración' });
+    return res.status(403).json({ error: 'No tienes permiso para ver esta configuración' });
   }
   res.json({ costos: obtenerConfigCreditos(), ivaPorcentaje: IVA_PORCENTAJE });
 });
@@ -1572,7 +1572,7 @@ app.get('/api/admin/configuracion-creditos', (req, res) => {
 app.put('/api/admin/configuracion-creditos', (req, res) => {
   const propio = clienteActual(req);
   if (!propio.es_admin) {
-    return res.status(403).json({ error: 'No tenés permiso para cambiar esta configuración' });
+    return res.status(403).json({ error: 'No tienes permiso para cambiar esta configuración' });
   }
   try {
     const costos = guardarConfigCreditos(req.body || {});
@@ -1597,7 +1597,7 @@ app.get('/api/planes-publico', (req, res) => {
 app.get('/api/admin/planes', (req, res) => {
   const propio = clienteActual(req);
   if (!propio.es_admin) {
-    return res.status(403).json({ error: 'No tenés permiso para ver esta configuración' });
+    return res.status(403).json({ error: 'No tienes permiso para ver esta configuración' });
   }
   res.json({ planes: obtenerPlanesCatalogo(), ivaPorcentaje: IVA_PORCENTAJE });
 });
@@ -1605,7 +1605,7 @@ app.get('/api/admin/planes', (req, res) => {
 app.put('/api/admin/planes', (req, res) => {
   const propio = clienteActual(req);
   if (!propio.es_admin) {
-    return res.status(403).json({ error: 'No tenés permiso para cambiar esta configuración' });
+    return res.status(403).json({ error: 'No tienes permiso para cambiar esta configuración' });
   }
   try {
     const planes = guardarPlanesCatalogo(req.body?.planes || []);
@@ -1765,7 +1765,7 @@ app.post('/api/facturacion/estadisticas', (req, res) => {
 
   const campanas = campanasParaFacturar(cliente.id, req.body?.campana_ids);
   if (campanas.length === 0) {
-    return res.status(400).json({ error: 'Elegí al menos una campaña de este cliente' });
+    return res.status(400).json({ error: 'Elige al menos una campaña de este cliente' });
   }
 
   const resumen = calcularResumen({
@@ -1785,7 +1785,7 @@ app.get('/api/facturacion/reporte.pdf', (req, res) => {
 
   const campanas = campanasParaFacturar(cliente.id, idsDesdeQuery(req.query.ids));
   if (campanas.length === 0) {
-    return res.status(400).json({ error: 'Elegí al menos una campaña de este cliente' });
+    return res.status(400).json({ error: 'Elige al menos una campaña de este cliente' });
   }
 
   const resumen = calcularResumen({
@@ -1820,7 +1820,7 @@ app.get('/api/facturacion/historial.pdf', (req, res) => {
   const ids = idsDesdeQuery(req.query.ids);
   const campanas = campanasParaFacturar(cliente.id, ids);
   if (campanas.length === 0) {
-    return res.status(400).json({ error: 'Elegí al menos una campaña de este cliente' });
+    return res.status(400).json({ error: 'Elige al menos una campaña de este cliente' });
   }
 
   const marcadores = campanas.map(() => '?').join(',');
@@ -1864,7 +1864,7 @@ app.post('/api/facturacion/cotizacion.pdf', (req, res) => {
 
   const ids = idsDesdeQuery(req.body?.contacto_ids);
   if (ids.length === 0) {
-    return res.status(400).json({ error: 'Elegí al menos un contacto' });
+    return res.status(400).json({ error: 'Elige al menos un contacto' });
   }
 
   const marcadores = ids.map(() => '?').join(',');
@@ -1920,12 +1920,12 @@ app.post('/api/facturacion/facturas', (req, res) => {
 
   const campanas = campanasParaFacturar(cliente.id, req.body?.campana_ids);
   if (campanas.length === 0) {
-    return res.status(400).json({ error: 'Elegí al menos una campaña de este cliente' });
+    return res.status(400).json({ error: 'Elige al menos una campaña de este cliente' });
   }
 
   const tarifa = Number(cliente.tarifa_por_mensaje) || 0;
   if (tarifa <= 0) {
-    return res.status(400).json({ error: 'Configurá primero la tarifa por mensaje de este cliente' });
+    return res.status(400).json({ error: 'Configura primero la tarifa por mensaje de este cliente' });
   }
 
   const resumen = calcularResumen({
@@ -2649,7 +2649,7 @@ function construirComponentesMeta(fila) {
     componentes.push({
       type: 'HEADER',
       format: fila.header_tipo,
-      example: { header_handle: ['<subir la muestra adjunta a Meta y pegar acá el handle que devuelve>'] },
+      example: { header_handle: ['<subir la muestra adjunta a Meta y pegar aquí el handle que devuelve>'] },
     });
   }
 
@@ -2747,7 +2747,7 @@ app.post('/api/plantillas', uploadMuestraPlantilla.single('muestra_encabezado'),
     return res.status(400).json({ error: 'El texto del encabezado es obligatorio y no puede superar 60 caracteres' });
   }
   if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerTipo) && !req.file) {
-    return res.status(400).json({ error: 'Subí un archivo de muestra para ese tipo de encabezado' });
+    return res.status(400).json({ error: 'Sube un archivo de muestra para ese tipo de encabezado' });
   }
   if (footerTexto && footerTexto.length > 60) {
     return res.status(400).json({ error: 'El pie no puede superar 60 caracteres' });
@@ -2793,7 +2793,7 @@ app.get('/api/plantillas', (req, res) => {
 app.get('/api/admin/plantillas', (req, res) => {
   const propio = clienteActual(req);
   if (!propio.es_admin) {
-    return res.status(403).json({ error: 'No tenés permiso para ver esta lista' });
+    return res.status(403).json({ error: 'No tienes permiso para ver esta lista' });
   }
 
   const estado = req.query.estado ? String(req.query.estado) : null;
@@ -2810,7 +2810,7 @@ app.get('/api/admin/plantillas', (req, res) => {
 app.patch('/api/admin/plantillas/:id', (req, res) => {
   const propio = clienteActual(req);
   if (!propio.es_admin) {
-    return res.status(403).json({ error: 'No tenés permiso para gestionar solicitudes' });
+    return res.status(403).json({ error: 'No tienes permiso para gestionar solicitudes' });
   }
 
   const solicitud = db.prepare('SELECT * FROM plantillas_solicitudes WHERE id = ?').get(req.params.id);

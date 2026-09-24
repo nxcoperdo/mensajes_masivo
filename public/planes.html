@@ -114,7 +114,7 @@
     </div>
 
     <p class="planes-eyebrow">Planes y precios</p>
-    <h1>Elegí el plan que se ajusta<br /><em>a tu volumen</em></h1>
+    <h1>Elige el plan que se ajusta<br /><em>a tu volumen</em></h1>
     <p>Precios en pesos colombianos, sin IVA. El IVA del 19% se suma al momento de facturar.</p>
   </div>
 
@@ -178,7 +178,7 @@
             </div>
             ${href
               ? `<a class="plan-cta" href="${href}" target="_blank" rel="noopener">${WHATSAPP_ICON} Contactar para compra</a>`
-              : `<span class="plan-cta" style="opacity: 0.5; cursor: default;">${WHATSAPP_ICON} Contactanos por otro medio</span>`}
+              : `<span class="plan-cta" style="opacity: 0.5; cursor: default;">${WHATSAPP_ICON} Contáctanos por otro medio</span>`}
           </div>
         `;
       }).join('');
@@ -186,8 +186,8 @@
       const linkGenerico = linkContacto('a medida');
       footer.innerHTML = `Todos los precios en pesos colombianos (COP) · IVA ${Math.round(data.ivaPorcentaje * 100)}% no incluido · Sin permanencia mínima<br />` +
         (linkGenerico
-          ? `¿Necesitás un volumen diferente? <a href="${linkGenerico}" target="_blank" rel="noopener">Escribinos y armamos un plan a medida</a>`
-          : `¿Necesitás un volumen diferente? Escribinos por otro medio y armamos un plan a medida.`);
+          ? `¿Necesitas un volumen diferente? <a href="${linkGenerico}" target="_blank" rel="noopener">Escríbenos y armamos un plan a medida</a>`
+          : `¿Necesitas un volumen diferente? Escríbenos por otro medio y armamos un plan a medida.`);
     }
 
     cargarPlanes();
