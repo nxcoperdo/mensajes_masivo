@@ -2826,6 +2826,7 @@ function renderConversaciones(conversaciones) {
           <span class="conv-hora">${formatearHora(c.ultimo_en)}</span>
         </span>
         <span class="conv-preview"><span>${escapeHtml(prefijo + (c.ultimo_mensaje || '').slice(0, 40))}</span></span>
+        ${esClienteAdmin && c.via ? `<span class="conv-via">vía ${escapeHtml(c.via)}</span>` : ''}
       </span>
       ${c.no_leidos > 0 ? `<span class="conv-unread-badge">${c.no_leidos}</span>` : ''}
     `;

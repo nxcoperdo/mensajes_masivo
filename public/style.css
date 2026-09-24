@@ -1219,6 +1219,15 @@ input[type='radio'] {
   align-items: center;
   gap: 4px;
 }
+.conv-via {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--color-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .conv-unread-badge {
   flex-shrink: 0;
   min-width: 18px;

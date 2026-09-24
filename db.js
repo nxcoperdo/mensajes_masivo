@@ -251,6 +251,11 @@ agregarColumnaSiFalta('mensajes', 'cliente_id INTEGER');
 agregarColumnaSiFalta('leads_prospectos', 'cliente_id INTEGER');
 agregarColumnaSiFalta('mensajes', 'media_id TEXT');
 agregarColumnaSiFalta('mensajes', 'media_mime_type TEXT');
+// Por cuál de nuestros números entró/salió el mensaje. Hace falta porque el
+// admin recibe una copia de las conversaciones de TODOS sus números (también
+// los asignados a empresas) y, si responde, tiene que salir por ese mismo
+// número y no por su número activo. NULL en mensajes viejos.
+agregarColumnaSiFalta('mensajes', 'phone_number_id TEXT');
 agregarColumnaSiFalta('campanas', 'imagen_media_id TEXT');
 agregarColumnaSiFalta('campanas', 'encabezado_tipo TEXT'); // 'image' | 'video' (null = image, retrocompat)
 

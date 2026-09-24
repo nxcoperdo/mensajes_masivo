@@ -1382,6 +1382,23 @@ app.post('/api/admin/empresas', (req, res) => {
  * `isWhatsAppConfigured`/`sendTemplate` funcionan igual que si la empresa
  * hubiera conectado su propio WhatsApp.
  */
+/**
+ * Un número de WhatsApp solo puede ser de UNA empresa (gestionada o
+ * independiente): las respuestas que llegan al webhook se atribuyen por
+ * `phone_number_id`, y si dos empresas comparten número no hay forma de
+ * saber de cuál es la respuesta (ver `clientePorPhoneNumberId`). El admin
+ * no cuenta — es el dueño del pool, no "usa" el número una vez asignado.
+ */
+function empresaQueYaTieneNumero(phoneNumberId, exceptoClienteId) {
+  return db
+    .prepare('SELECT id, nombre_negocio, email FROM clientes WHERE phone_number_id = ? AND es_admin = 0 AND id != ? LIMIT 1')
+    .get(phoneNumberId, exceptoClienteId);
+}
+
+function errorNumeroOcupado(otra) {
+  return `Ese número ya está asignado a "${otra.nombre_negocio || otra.email}". Un número solo puede ser de una empresa — desasignáselo primero.`;
+}
+
 app.patch('/api/admin/empresas/:id/numero', (req, res) => {
   const propio = clienteActual(req);
   if (!propio.es_admin) {
@@ -1398,6 +1415,9 @@ app.patch('/api/admin/empresas/:id/numero', (req, res) => {
     .prepare('SELECT * FROM whatsapp_numeros WHERE id = ? AND cliente_id = ?')
     .get(whatsapp_numero_id, propio.id);
   if (!numero) return res.status(404).json({ error: 'Ese número no está entre los tuyos conectados' });
+
+  const otra = empresaQueYaTieneNumero(numero.phone_number_id, empresa.id);
+  if (otra) return res.status(409).json({ error: errorNumeroOcupado(otra) });
 
   db.prepare(
     `UPDATE clientes SET waba_id = ?, phone_number_id = ?, access_token = ?, estado = 'conectado' WHERE id = ?`
@@ -1468,6 +1488,9 @@ app.patch('/api/admin/clientes-independientes/:id/numero', (req, res) => {
       .prepare('SELECT * FROM whatsapp_numeros WHERE id = ? AND cliente_id = ?')
       .get(whatsapp_numero_id, propio.id);
     if (!numero) return res.status(404).json({ error: 'Ese número no está entre los tuyos conectados' });
+
+    const otra = empresaQueYaTieneNumero(numero.phone_number_id, cliente.id);
+    if (otra) return res.status(409).json({ error: errorNumeroOcupado(otra) });
 
     db.prepare(
       `UPDATE clientes SET waba_id = ?, phone_number_id = ?, access_token = ?, estado = 'conectado' WHERE id = ?`
@@ -2125,8 +2148,17 @@ const ESTADO_RANK = { enviado: 1, entregado: 2, leido: 3, fallido: 99 };
 const MAPA_ESTADOS_META = { sent: 'enviado', delivered: 'entregado', read: 'leido', failed: 'fallido' };
 
 const insertMensajeEntrante = db.prepare(`
-  INSERT INTO mensajes (telefono, direccion, tipo, texto, media_id, media_mime_type, wa_message_id, estado, nombre_perfil, leido_por_agente, cliente_id)
-  VALUES (?, 'entrante', ?, ?, ?, ?, ?, 'recibido', ?, 0, ?)
+  INSERT INTO mensajes (telefono, direccion, tipo, texto, media_id, media_mime_type, wa_message_id, estado, nombre_perfil, leido_por_agente, cliente_id, phone_number_id)
+  VALUES (?, 'entrante', ?, ?, ?, ?, ?, 'recibido', ?, 0, ?, ?)
+`);
+
+// El admin dueño del número en su pool — recibe una copia de todo lo que
+// entra por sus números aunque el número esté asignado a una empresa.
+const adminDuenoDelNumero = db.prepare(`
+  SELECT c.id
+  FROM whatsapp_numeros n JOIN clientes c ON c.id = n.cliente_id
+  WHERE n.phone_number_id = ? AND c.es_admin = 1
+  LIMIT 1
 `);
 
 /**
@@ -2301,20 +2333,28 @@ function procesarWebhookWhatsApp(body) {
         if (c.wa_id && c.profile?.name) nombresPerfil[c.wa_id] = c.profile.name;
       }
 
+      // Si el número es de una empresa, el admin dueño del pool también ve
+      // la conversación (copia aparte, con su propio "leído").
+      const admin = adminDuenoDelNumero.get(phoneNumberId);
+      const destinatarios = admin && admin.id !== cliente.id ? [cliente.id, admin.id] : [cliente.id];
+
       for (const msg of valor.messages || []) {
         const telefono = msg.from;
         if (!telefono) continue;
         const { mediaId, mimeType } = extraerMedia(msg);
-        insertMensajeEntrante.run(
-          telefono,
-          msg.type || 'texto',
-          extraerTextoMensaje(msg),
-          mediaId,
-          mimeType,
-          msg.id || null,
-          nombresPerfil[telefono] || null,
-          cliente.id
-        );
+        for (const clienteId of destinatarios) {
+          insertMensajeEntrante.run(
+            telefono,
+            msg.type || 'texto',
+            extraerTextoMensaje(msg),
+            mediaId,
+            mimeType,
+            msg.id || null,
+            nombresPerfil[telefono] || null,
+            clienteId,
+            phoneNumberId
+          );
+        }
 
         if (msg.type === 'interactive' && msg.interactive?.type === 'nfm_reply') {
           guardarRespuestaFlow(cliente.id, telefono, msg);
@@ -2379,8 +2419,13 @@ app.get('/api/conversaciones', (req, res) => {
 
   const conversaciones = telefonos.map(({ telefono }) => {
     const ultimo = db
-      .prepare(`SELECT texto, direccion, estado, creado_en FROM mensajes WHERE telefono = ? AND cliente_id = ? ORDER BY creado_en DESC, id DESC LIMIT 1`)
+      .prepare(`SELECT texto, direccion, estado, creado_en, phone_number_id FROM mensajes WHERE telefono = ? AND cliente_id = ? ORDER BY creado_en DESC, id DESC LIMIT 1`)
       .get(telefono, clienteId);
+    // Etiqueta del número por el que entró — el admin ve conversaciones de
+    // todos sus números mezcladas, así sabe de qué empresa/línea es cada una.
+    const via = ultimo?.phone_number_id
+      ? db.prepare('SELECT etiqueta FROM whatsapp_numeros WHERE phone_number_id = ? AND etiqueta IS NOT NULL LIMIT 1').get(ultimo.phone_number_id)?.etiqueta || ultimo.phone_number_id
+      : null;
     const contacto = db.prepare('SELECT nombre FROM contactos WHERE telefono = ? AND cliente_id = ?').get(telefono, clienteId);
     const noLeidos = db
       .prepare(`SELECT COUNT(*) AS n FROM mensajes WHERE telefono = ? AND cliente_id = ? AND direccion = 'entrante' AND leido_por_agente = 0`)
@@ -2393,6 +2438,7 @@ app.get('/api/conversaciones', (req, res) => {
       ultimo_estado: ultimo?.estado,
       ultimo_en: ultimo?.creado_en,
       no_leidos: noLeidos,
+      via,
     };
   });
 
@@ -2418,9 +2464,16 @@ app.get('/api/conversaciones/:telefono/mensajes', (req, res) => {
  * navegador.
  */
 app.get('/api/mensajes/:id/media', async (req, res) => {
+  // Token del número por el que entró el mensaje (puede no ser el activo
+  // del cliente — ej. la copia del admin de un número asignado a una
+  // empresa); si no se sabe el número (mensajes viejos), el del cliente.
   const mensaje = db
     .prepare(
-      `SELECT m.media_id, m.media_mime_type, c.access_token
+      `SELECT m.media_id, m.media_mime_type,
+              COALESCE(
+                (SELECT n.access_token FROM whatsapp_numeros n WHERE n.phone_number_id = m.phone_number_id AND n.cliente_id = m.cliente_id),
+                c.access_token
+              ) AS access_token
        FROM mensajes m JOIN clientes c ON c.id = m.cliente_id
        WHERE m.id = ? AND m.cliente_id = ?`
     )
@@ -2476,15 +2529,52 @@ app.post('/api/conversaciones/:telefono/responder', async (req, res) => {
     return res.status(400).json({ error: 'Todavía no conectaste tu cuenta de WhatsApp Business' });
   }
 
+  // Se responde por el mismo número por el que entró la conversación. Para
+  // una empresa es siempre su único número; para el admin puede ser
+  // cualquiera de su pool (incluidos los asignados a empresas), así que se
+  // busca el token de ese número en `whatsapp_numeros`.
+  let phoneNumberId = cliente.phone_number_id;
+  let accessToken = cliente.access_token;
+  const ultimo = db
+    .prepare(`SELECT phone_number_id FROM mensajes WHERE telefono = ? AND cliente_id = ? AND phone_number_id IS NOT NULL ORDER BY id DESC LIMIT 1`)
+    .get(telefono, cliente.id);
+  if (ultimo && ultimo.phone_number_id !== phoneNumberId) {
+    const delPool = db
+      .prepare('SELECT access_token FROM whatsapp_numeros WHERE cliente_id = ? AND phone_number_id = ?')
+      .get(cliente.id, ultimo.phone_number_id);
+    if (delPool?.access_token) {
+      phoneNumberId = ultimo.phone_number_id;
+      accessToken = delPool.access_token;
+    }
+  }
+
   const textoLimpio = texto.trim();
-  const resultado = await sendTextMessage({ to: telefono, body: textoLimpio, phoneNumberId: cliente.phone_number_id, accessToken: cliente.access_token });
+  const resultado = await sendTextMessage({ to: telefono, body: textoLimpio, phoneNumberId, accessToken });
 
   const insertado = db
     .prepare(`
-      INSERT INTO mensajes (telefono, direccion, tipo, texto, wa_message_id, estado, error, leido_por_agente, cliente_id)
-      VALUES (?, 'saliente', 'texto', ?, ?, ?, ?, 1, ?)
+      INSERT INTO mensajes (telefono, direccion, tipo, texto, wa_message_id, estado, error, leido_por_agente, cliente_id, phone_number_id)
+      VALUES (?, 'saliente', 'texto', ?, ?, ?, ?, 1, ?, ?)
     `)
-    .run(telefono, textoLimpio, resultado.messageId || null, resultado.ok ? 'enviado' : 'fallido', resultado.ok ? null : resultado.error, cliente.id);
+    .run(telefono, textoLimpio, resultado.messageId || null, resultado.ok ? 'enviado' : 'fallido', resultado.ok ? null : resultado.error, cliente.id, phoneNumberId);
+
+  // La otra cuenta que ve esta conversación (la empresa dueña del número, o
+  // el admin dueño del pool) también tiene que ver lo que se respondió.
+  if (resultado.ok) {
+    const otros = db
+      .prepare(`
+        SELECT id FROM clientes WHERE phone_number_id = ? AND es_admin = 0 AND id != ?
+        UNION
+        SELECT c.id FROM whatsapp_numeros n JOIN clientes c ON c.id = n.cliente_id
+        WHERE n.phone_number_id = ? AND c.es_admin = 1 AND c.id != ?
+      `)
+      .all(phoneNumberId, cliente.id, phoneNumberId, cliente.id);
+    const copia = db.prepare(`
+      INSERT INTO mensajes (telefono, direccion, tipo, texto, wa_message_id, estado, leido_por_agente, cliente_id, phone_number_id)
+      VALUES (?, 'saliente', 'texto', ?, ?, 'enviado', 1, ?, ?)
+    `);
+    for (const otro of otros) copia.run(telefono, textoLimpio, resultado.messageId, otro.id, phoneNumberId);
+  }
 
   if (!resultado.ok) {
     return res.status(502).json({ error: resultado.error, id: insertado.lastInsertRowid });
