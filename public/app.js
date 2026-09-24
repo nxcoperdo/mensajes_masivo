@@ -12,6 +12,7 @@ let misCreditos = null; // { creditos, costos: {MARKETING,UTILITY,AUTHENTICATION
 let misPlan = null; // { plan, mediosDisponibles, mediosLibres, contactosQueEntran: {MARKETING,UTILITY,AUTHENTICATION} } — null si no aplica
 let planesAdminCache = []; // catálogo de planes, para el panel admin
 let contactoWhatsappAdmin = null; // seteado en cargarConfig() — para el botón "Recargar" del modal de cuota
+let refrescoSaldoProgramado = null;
 
 // ==================== SESIÓN ====================
 // Cualquier fetch que devuelva 401 (sesión vencida o cerrada en otra
@@ -1719,6 +1720,30 @@ async function cargarMisCreditos() {
   actualizarEstimadoCreditos();
 }
 
+async function refrescarEstadoCobro() {
+  if (esClienteAdmin) return;
+  if (misPlan?.aplica) {
+    await cargarMiPlan();
+    return;
+  }
+  await cargarMisCreditos();
+}
+
+function iniciarRefrescoEstadoCobro() {
+  if (refrescoSaldoProgramado) return;
+  refrescoSaldoProgramado = setInterval(() => {
+    if (document.hidden) return;
+    refrescarEstadoCobro();
+  }, 30000);
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refrescarEstadoCobro();
+  });
+  window.addEventListener('focus', () => {
+    refrescarEstadoCobro();
+  });
+}
+
 /** Trae la cuota del plan mensual del cliente logueado (no-op si no tiene plan asignado). */
 async function cargarMiPlan() {
   const res = await fetch('/api/plan');
@@ -1729,9 +1754,12 @@ async function cargarMiPlan() {
     return;
   }
   misPlan = data;
-  document.getElementById('bloqueCreditosCampana').classList.remove('hidden');
-  document.getElementById('notaCostoCampana').textContent = `Plan ${misPlan.plan.nombre}: todos los mensajes valen igual (Marketing, Utilidad, Autenticación, con o sin imagen/video) — cada uno gasta 1 mensaje de la cuota.`;
-  actualizarEstimadoCreditos();
+  // A un cliente con plan ya no le mostramos la tarjeta "Plan" de "Nueva
+  // campaña" (categoría + estimado) — con la regla de "todo vale igual" no
+  // le aporta nada verla. El <select> de categoría sigue en el DOM oculto,
+  // así que la campaña se sigue mandando con una categoría válida por
+  // detrás (el backend la sigue pidiendo, pero ya no afecta el costo).
+  document.getElementById('bloqueCreditosCampana').classList.add('hidden');
 
   document.getElementById('cardMiPlan').classList.remove('hidden');
   document.getElementById('miPlanNombre').textContent = misPlan.plan.nombre;
@@ -1814,6 +1842,7 @@ async function pollProgresoCampana(campanaId, total, box, btn, paramsCliente = '
       box.classList.add(c.fallidos > 0 ? 'error' : 'ok');
       box.textContent = `Listo. ✓ ${c.enviados} enviados, ✕ ${c.fallidos} fallidos de ${total}. Revisá el detalle en "Historial".`;
       btn.disabled = false;
+      refrescarEstadoCobro();
     }
   }, 1500);
 }
@@ -3172,6 +3201,7 @@ renderBotonesPlantilla();
 (async () => {
   const conectado = await cargarConfig();
   if (!conectado) return; // pantalla "Conectar WhatsApp" ya se mostró — no hay nada más para cargar
+  iniciarRefrescoEstadoCobro();
   cargarContactos();
   cargarListas();
   renderParametros();
