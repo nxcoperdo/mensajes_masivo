@@ -145,7 +145,6 @@ function esRutaPublica(req) {
  * (sembrado en db.js), no como un gate global.
  */
 function requireAuth(req, res, next) {
-  console.log(`[requireAuth] ${req.method} ${req.path} session=${!!(req.session && req.session.clienteId)} public=${esRutaPublica(req)}`);
   if (esRutaPublica(req)) return next();
   if (req.session && req.session.clienteId) return next();
 
@@ -2130,7 +2129,34 @@ const insertMensajeEntrante = db.prepare(`
   VALUES (?, 'entrante', ?, ?, ?, ?, ?, 'recibido', ?, 0, ?)
 `);
 
-const clientePorPhoneNumberId = db.prepare('SELECT id FROM clientes WHERE phone_number_id = ?');
+/**
+ * BUG real (2026-09-23): cuando el admin conecta su primer número, éste
+ * queda guardado tanto en su pool (`whatsapp_numeros`) COMO en su propia
+ * fila de `clientes` (es "su número activo" — ver POST /api/whatsapp/oauth
+ * más arriba, "el primer número que conecta una cuenta queda activo
+ * automáticamente"). Si después el admin le asigna ESE MISMO número a una
+ * empresa independiente o gestionada, esa empresa también termina con ese
+ * `phone_number_id` en su propia fila — dos clientes con el mismo número,
+ * ambos con prioridad 0 en el ORDER BY de abajo. Como el admin casi
+ * siempre tiene el `id` más chico (primer cliente sembrado), el desempate
+ * `c.id` lo hacía ganar siempre, y todo mensaje entrante de ese número le
+ * llegaba a él en vez de a la empresa dueña real del número.
+ *
+ * Fix: un cliente NO admin con el número como propio (`c.phone_number_id`)
+ * tiene prioridad absoluta (0). El admin solo es el destino de fallback
+ * (prioridad 1) — para números que todavía nadie tiene asignado, o para
+ * cuando el admin manda mensajes de prueba con un número que no le dio a
+ * nadie todavía.
+ */
+const clientePorPhoneNumberId = db.prepare(`
+  SELECT c.id
+  FROM clientes c
+  LEFT JOIN whatsapp_numeros n ON n.cliente_id = c.id
+  WHERE c.phone_number_id = ? OR n.phone_number_id = ?
+  GROUP BY c.id
+  ORDER BY CASE WHEN c.phone_number_id = ? AND c.es_admin = 0 THEN 0 ELSE 1 END, c.id
+  LIMIT 1
+`);
 
 // Tipos de mensaje que traen un archivo descargable de Meta (`msg.<tipo>.id`
 // + `.mime_type`) — se guardan para poder mostrarlos después vía
@@ -2261,9 +2287,14 @@ function procesarWebhookWhatsApp(body) {
       // Un solo webhook de Meta recibe eventos de TODAS las WABAs
       // suscriptas a la app — hay que resolver a qué cliente pertenece
       // este evento por el phone_number_id que manda Meta en el payload.
+      // Primero intenta contra el número activo del cliente y después
+      // contra cualquier número guardado en `whatsapp_numeros`.
       const phoneNumberId = valor.metadata?.phone_number_id;
-      const cliente = phoneNumberId ? clientePorPhoneNumberId.get(phoneNumberId) : null;
-      if (!cliente) continue; // evento de un número que no conocemos (o app en dev con otro tester)
+      const cliente = phoneNumberId ? clientePorPhoneNumberId.get(phoneNumberId, phoneNumberId, phoneNumberId) : null;
+      if (!cliente) {
+        console.warn('Webhook de WhatsApp ignorado: phone_number_id no reconocido', phoneNumberId);
+        continue;
+      }
 
       const nombresPerfil = {};
       for (const c of valor.contacts || []) {

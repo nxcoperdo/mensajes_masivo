@@ -193,12 +193,27 @@ async function cargarConfig() {
       firmaBadge.textContent = 'Sin validar (opcional)';
       firmaBadge.className = 'badge badge-muted';
     }
+    renumerarPasosCampana();
     return true;
   } catch {
     badge.textContent = 'No se pudo conectar al servidor';
     badge.className = 'badge badge-error';
     return false;
   }
+}
+
+/** Los pasos de "Nueva campaña" (1. Plantilla, 2. Parámetros, …) están
+ * numerados a mano en el HTML — si algún paso queda oculto (ej. el de
+ * "Plan" para admin, o para un cliente con plan que ya no lo necesita ver),
+ * hay que renumerar los que quedan visibles para no dejar un salto. */
+function renumerarPasosCampana() {
+  const tarjetas = document.querySelectorAll('#tab-campana > .card, #tab-campana > #bloqueCreditosCampana');
+  let n = 1;
+  tarjetas.forEach((tarjeta) => {
+    if (tarjeta.classList.contains('hidden') || tarjeta.classList.contains('send-bar-card')) return;
+    const badge = tarjeta.querySelector('.section-header-badge');
+    if (badge) badge.textContent = n++;
+  });
 }
 
 // Desde "Plantillas" (cuando todavía no hay número asignado), un cliente que
