@@ -12,21 +12,44 @@
   <div class="auth-page">
     <!-- Panel izquierdo: marca (oculto en mobile) -->
     <div class="auth-side">
-      <div class="auth-side-grid"></div>
-      <div class="auth-side-glow"></div>
+      <div class="auth-side-grid" aria-hidden="true"></div>
+      <div class="auth-side-scan" aria-hidden="true"></div>
+      <div class="auth-side-glow" aria-hidden="true"></div>
+      <div class="auth-side-glow-2" aria-hidden="true"></div>
+      <div class="auth-particles" aria-hidden="true">
+        <span style="--x:6%;--s:3px;--t:9s;--d:0s;--o:.35"></span>
+        <span style="--x:14%;--s:2px;--t:12s;--d:2.5s;--o:.25"></span>
+        <span style="--x:22%;--s:4px;--t:8s;--d:5s;--o:.4"></span>
+        <span style="--x:30%;--s:2px;--t:13s;--d:1s;--o:.2"></span>
+        <span style="--x:38%;--s:3px;--t:10s;--d:6.5s;--o:.3"></span>
+        <span style="--x:46%;--s:2px;--t:7s;--d:3s;--o:.45"></span>
+        <span style="--x:54%;--s:4px;--t:11s;--d:0.5s;--o:.2"></span>
+        <span style="--x:62%;--s:2px;--t:9s;--d:4.5s;--o:.35"></span>
+        <span style="--x:70%;--s:3px;--t:14s;--d:2s;--o:.25"></span>
+        <span style="--x:78%;--s:2px;--t:8s;--d:7s;--o:.4"></span>
+        <span style="--x:86%;--s:3px;--t:12s;--d:1.5s;--o:.3"></span>
+        <span style="--x:94%;--s:2px;--t:10s;--d:5.5s;--o:.2"></span>
+        <span style="--x:10%;--s:2px;--t:11s;--d:7.5s;--o:.3"></span>
+        <span style="--x:50%;--s:3px;--t:13s;--d:6s;--o:.25"></span>
+        <span style="--x:82%;--s:2px;--t:9s;--d:3.5s;--o:.35"></span>
+        <span style="--x:34%;--s:3px;--t:7s;--d:4s;--o:.3"></span>
+      </div>
 
       <div class="auth-logo">
         <div class="auth-logo-badge">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" /></svg>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" /></svg>
           <span class="auth-logo-wordmark">Daemon <em>Leads</em></span>
         </div>
-        <span class="auth-logo-by">by CodeRepair Tech Inc.</span>
+        <span class="auth-logo-by">by CodeRepair</span>
       </div>
 
       <div class="auth-side-body">
         <div>
-          <p class="auth-eyebrow">Mensajería masiva</p>
-          <h1 class="auth-side-title">Daemon<br /><em>Leads</em></h1>
+          <p class="auth-eyebrow">◆ Plataforma de gestión de leads</p>
+          <h1 class="auth-side-title" aria-label="Daemon Leads">
+            <span aria-hidden="true"><span class="l" style="--i:0">D</span><span class="l" style="--i:1">a</span><span class="l" style="--i:2">e</span><span class="l" style="--i:3">m</span><span class="l" style="--i:4">o</span><span class="l" style="--i:5">n</span></span><br />
+            <em aria-hidden="true"><span class="l" style="--i:0">L</span><span class="l" style="--i:1">e</span><span class="l" style="--i:2">a</span><span class="l" style="--i:3">d</span><span class="l" style="--i:4">s</span></em>
+          </h1>
           <p class="auth-side-copy">Capturá, gestioná y convertí leads con precisión. Tu pipeline de ventas, automatizado y escalable.</p>
         </div>
 
@@ -61,12 +84,13 @@
 
       <div class="auth-form-wrap">
         <div class="auth-form-header">
+          <div class="auth-form-eyebrow"><span>Empezá gratis</span></div>
           <h1>Crear cuenta</h1>
           <p>Después de registrarte, conectás tu propia cuenta de WhatsApp Business.</p>
         </div>
 
         <form id="formRegistro">
-          <div class="auth-field">
+          <div class="auth-field auth-anim" style="--d:.28s">
             <label for="nombre_negocio">Nombre del negocio</label>
             <div class="auth-input-wrap">
               <span class="auth-input-icon">
@@ -76,7 +100,7 @@
             </div>
           </div>
 
-          <div class="auth-field">
+          <div class="auth-field auth-anim" style="--d:.35s">
             <label for="email">Email</label>
             <div class="auth-input-wrap">
               <span class="auth-input-icon">
@@ -86,7 +110,7 @@
             </div>
           </div>
 
-          <div class="auth-field">
+          <div class="auth-field auth-anim" style="--d:.42s">
             <label for="password">Contraseña</label>
             <div class="auth-input-wrap">
               <span class="auth-input-icon">
@@ -98,14 +122,16 @@
               </button>
             </div>
           </div>
-          <p class="auth-hint">Mínimo 8 caracteres.</p>
+          <p class="auth-hint auth-anim" style="--d:.42s">Mínimo 8 caracteres.</p>
 
-          <button type="submit" class="auth-submit">Crear cuenta</button>
+          <div class="auth-anim" style="--d:.49s">
+            <button type="submit" class="auth-submit">Crear cuenta →</button>
+          </div>
         </form>
         <div id="registroResultado" class="result-box hidden"></div>
 
-        <p class="auth-switch">¿Ya tenés cuenta? <a href="/login.html">Iniciá sesión</a></p>
-        <a href="/planes.html" class="btn-ver-planes">
+        <p class="auth-switch auth-anim" style="--d:.56s">¿Ya tenés cuenta? <a href="/login.html">Iniciá sesión</a></p>
+        <a href="/planes.html" class="btn-ver-planes auth-anim" style="--d:.62s">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18M8 4v6" /></svg>
           Ver planes y precios
         </a>
@@ -125,6 +151,17 @@
       inputPassword.type = showing ? 'password' : 'text';
       btnToggle.innerHTML = showing ? eyeOpen : eyeClosed;
       btnToggle.setAttribute('aria-label', showing ? 'Mostrar contraseña' : 'Ocultar contraseña');
+    });
+
+    document.querySelector('.auth-submit').addEventListener('pointerdown', (e) => {
+      const btn = e.currentTarget;
+      const rect = btn.getBoundingClientRect();
+      const r = document.createElement('span');
+      r.className = 'auth-ripple';
+      r.style.left = `${e.clientX - rect.left}px`;
+      r.style.top = `${e.clientY - rect.top}px`;
+      btn.appendChild(r);
+      setTimeout(() => r.remove(), 700);
     });
 
     document.getElementById('formRegistro').addEventListener('submit', async (e) => {
