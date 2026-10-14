@@ -16,6 +16,7 @@ import { sendTextMessage, subirMedia, normalizePhone, isWhatsAppConfigured } fro
 import { normalizarVideoWhatsApp, MAX_VIDEO_BYTES } from './video.js';
 import { procesarCampana, validarParametrosDef, particionarPorParametros } from './campanas.js';
 import { iniciarScheduler } from './scheduler.js';
+import { validarContenidoPlantilla, validarBotones } from './plantillas.js';
 import {
   CATEGORIAS_CREDITO,
   esClienteIndependiente,
@@ -2658,44 +2659,6 @@ app.post('/api/conversaciones/:telefono/responder', async (req, res) => {
 const CATEGORIAS_PLANTILLA = ['MARKETING', 'UTILITY', 'AUTHENTICATION'];
 const HEADER_TIPOS_PLANTILLA = ['NONE', 'TEXT', 'IMAGE', 'VIDEO', 'DOCUMENT'];
 const ESTADOS_PLANTILLA = ['pendiente', 'esperando_confirmacion', 'lista_para_enviar', 'rechazada', 'cancelada'];
-const TIPOS_BOTON_PLANTILLA = ['QUICK_REPLY', 'URL', 'PHONE_NUMBER'];
-
-/**
- * Valida y limpia el array de botones que manda el cliente, respetando los
- * mismos límites que exige Meta para plantillas: hasta 10 en total, máximo 3
- * de respuesta rápida, 2 de URL y 1 de llamada telefónica.
- */
-function validarBotonesPlantilla(botonesRaw) {
-  if (botonesRaw === undefined || botonesRaw === null || botonesRaw === '') return [];
-  const lista = Array.isArray(botonesRaw) ? botonesRaw : JSON.parse(botonesRaw);
-  if (!Array.isArray(lista)) throw new Error('Los botones deben ser una lista');
-  if (lista.length > 10) throw new Error('Máximo 10 botones por plantilla');
-
-  const contador = { QUICK_REPLY: 0, URL: 0, PHONE_NUMBER: 0 };
-  const limpios = lista.map((b, i) => {
-    const tipo = String(b?.tipo || '').toUpperCase();
-    if (!TIPOS_BOTON_PLANTILLA.includes(tipo)) throw new Error(`Botón ${i + 1}: tipo inválido`);
-    const texto = String(b?.texto || '').trim();
-    if (!texto) throw new Error(`Botón ${i + 1}: falta el texto`);
-    contador[tipo] += 1;
-
-    const boton = { tipo, texto };
-    if (tipo === 'URL') {
-      boton.url = String(b?.url || '').trim();
-      if (!boton.url) throw new Error(`Botón ${i + 1}: falta la URL`);
-    }
-    if (tipo === 'PHONE_NUMBER') {
-      boton.telefono = String(b?.telefono || '').trim();
-      if (!boton.telefono) throw new Error(`Botón ${i + 1}: falta el teléfono`);
-    }
-    return boton;
-  });
-
-  if (contador.QUICK_REPLY > 3) throw new Error('Máximo 3 botones de respuesta rápida');
-  if (contador.URL > 2) throw new Error('Máximo 2 botones de URL');
-  if (contador.PHONE_NUMBER > 1) throw new Error('Máximo 1 botón de llamada telefónica');
-  return limpios;
-}
 
 /**
  * Arma el bloque `components` con la forma exacta que espera la Graph API de
@@ -2716,7 +2679,12 @@ function construirComponentesMeta(fila) {
     });
   }
 
-  componentes.push({ type: 'BODY', text: fila.body_texto });
+  const ejemplos = JSON.parse(fila.ejemplos_json || '[]');
+  componentes.push(
+    ejemplos.length > 0
+      ? { type: 'BODY', text: fila.body_texto, example: { body_text: [ejemplos] } }
+      : { type: 'BODY', text: fila.body_texto }
+  );
 
   if (fila.footer_texto) {
     componentes.push({ type: 'FOOTER', text: fila.footer_texto });
@@ -2749,6 +2717,7 @@ function serializarSolicitudPlantilla(fila) {
     body_texto: fila.body_texto,
     footer_texto: fila.footer_texto,
     botones: JSON.parse(fila.botones_json || '[]'),
+    ejemplos: JSON.parse(fila.ejemplos_json || '[]'),
     numero_personalizado: Boolean(fila.numero_personalizado),
     nota_cliente: fila.nota_cliente,
     numero_asignado: fila.numero_etiqueta || fila.numero_phone_id || null,
@@ -2791,43 +2760,47 @@ app.post('/api/plantillas', uploadMuestraPlantilla.single('muestra_encabezado'),
   const numeroPersonalizado = ['true', '1', true].includes(body.numero_personalizado);
   const notaCliente = body.nota_cliente ? String(body.nota_cliente).trim() : null;
 
-  if (!/^[a-z0-9_]+$/.test(nombre)) {
-    return res.status(400).json({ error: 'El nombre debe ir en minúsculas, sin espacios ni acentos (solo letras, números y guion bajo)' });
+  let ejemplos = [];
+  try {
+    ejemplos = body.ejemplos_json ? JSON.parse(body.ejemplos_json) : [];
+  } catch {
+    return res.status(400).json({ error: 'Los ejemplos de las variables tienen un formato inválido' });
   }
+  if (!Array.isArray(ejemplos)) return res.status(400).json({ error: 'Los ejemplos de las variables tienen un formato inválido' });
+  ejemplos = ejemplos.map((e) => String(e ?? '').trim());
+
   if (!CATEGORIAS_PLANTILLA.includes(categoria)) {
-    return res.status(400).json({ error: 'Categoría inválida' });
+    return res.status(400).json({ error: 'Elige la categoría de la plantilla (Marketing, Utilidad o Autenticación)' });
   }
   if (!HEADER_TIPOS_PLANTILLA.includes(headerTipo)) {
     return res.status(400).json({ error: 'Tipo de encabezado inválido' });
   }
-  if (!bodyTexto) {
-    return res.status(400).json({ error: 'Falta el cuerpo de la plantilla' });
-  }
-  if (bodyTexto.length > 1024) {
-    return res.status(400).json({ error: 'El cuerpo no puede superar 1024 caracteres' });
-  }
-  if (headerTipo === 'TEXT' && (!headerTexto || headerTexto.length > 60)) {
-    return res.status(400).json({ error: 'El texto del encabezado es obligatorio y no puede superar 60 caracteres' });
-  }
+  const errorContenido = validarContenidoPlantilla({ nombre, idioma, headerTipo, headerTexto, bodyTexto, footerTexto, ejemplos });
+  if (errorContenido) return res.status(400).json({ error: errorContenido });
   if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerTipo) && !req.file) {
     return res.status(400).json({ error: 'Sube un archivo de muestra para ese tipo de encabezado' });
-  }
-  if (footerTexto && footerTexto.length > 60) {
-    return res.status(400).json({ error: 'El pie no puede superar 60 caracteres' });
   }
 
   let botonesLimpios;
   try {
-    botonesLimpios = validarBotonesPlantilla(body.botones_json);
+    botonesLimpios = validarBotones(body.botones_json);
   } catch (err) {
     return res.status(400).json({ error: err.message });
+  }
+
+  // Mismo nombre e idioma ya pedido y todavía vigente: Meta no permite dos plantillas con el mismo nombre.
+  const repetida = db
+    .prepare(`SELECT id, estado FROM plantillas_solicitudes WHERE cliente_id = ? AND nombre = ? AND idioma = ? AND estado NOT IN ('cancelada', 'rechazada') LIMIT 1`)
+    .get(req.session.clienteId, nombre, idioma);
+  if (repetida) {
+    return res.status(409).json({ error: `Ya tienes una solicitud con el nombre «${nombre}» (${idioma}) en curso. Cámbiale el nombre (ej: ${nombre}_v2) o cancela la anterior.` });
   }
 
   const result = db
     .prepare(
       `INSERT INTO plantillas_solicitudes
-        (cliente_id, nombre, categoria, idioma, header_tipo, header_texto, header_media_path, body_texto, footer_texto, botones_json, numero_personalizado, nota_cliente)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        (cliente_id, nombre, categoria, idioma, header_tipo, header_texto, header_media_path, body_texto, footer_texto, botones_json, numero_personalizado, nota_cliente, ejemplos_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       req.session.clienteId,
@@ -2841,7 +2814,8 @@ app.post('/api/plantillas', uploadMuestraPlantilla.single('muestra_encabezado'),
       footerTexto,
       JSON.stringify(botonesLimpios),
       numeroPersonalizado ? 1 : 0,
-      notaCliente
+      notaCliente,
+      JSON.stringify(ejemplos)
     );
 
   const creada = db.prepare(`${SELECT_PLANTILLA_BASE} WHERE s.id = ?`).get(result.lastInsertRowid);
@@ -2851,6 +2825,25 @@ app.post('/api/plantillas', uploadMuestraPlantilla.single('muestra_encabezado'),
 app.get('/api/plantillas', (req, res) => {
   const filas = db.prepare(`${SELECT_PLANTILLA_BASE} WHERE s.cliente_id = ? ORDER BY s.creado_en DESC`).all(req.session.clienteId);
   res.json({ solicitudes: filas.map(serializarSolicitudPlantilla) });
+});
+
+/**
+ * El cliente cancela una solicitud que el equipo aún no empezó a gestionar
+ * (estado 'pendiente'). Solo las suyas, y solo ese cambio de estado.
+ */
+app.patch('/api/plantillas/:id/cancelar', (req, res) => {
+  const solicitud = db.prepare('SELECT * FROM plantillas_solicitudes WHERE id = ? AND cliente_id = ?').get(req.params.id, req.session.clienteId);
+  if (!solicitud) return res.status(404).json({ error: 'Solicitud no encontrada' });
+  if (solicitud.estado !== 'pendiente') {
+    return res.status(409).json({
+      error: solicitud.estado === 'cancelada'
+        ? 'Esta solicitud ya estaba cancelada.'
+        : 'Esta solicitud ya está en gestión y no se puede cancelar desde aquí. Escríbenos si necesitas detenerla.',
+    });
+  }
+  db.prepare(`UPDATE plantillas_solicitudes SET estado = 'cancelada', actualizado_en = datetime('now') WHERE id = ?`).run(solicitud.id);
+  const actualizada = db.prepare(`${SELECT_PLANTILLA_BASE} WHERE s.id = ?`).get(solicitud.id);
+  res.json({ solicitud: serializarSolicitudPlantilla(actualizada) });
 });
 
 app.get('/api/admin/plantillas', (req, res) => {

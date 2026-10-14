@@ -289,6 +289,8 @@ agregarColumnaSiFalta('clientes', 'es_admin INTEGER NOT NULL DEFAULT 0');
  */
 agregarColumnaSiFalta('contactos', "variables_json TEXT NOT NULL DEFAULT '{}'");
 agregarColumnaSiFalta('contactos', 'fecha_recordatorio TEXT');
+// Ejemplo de cada variable {{N}} del cuerpo de una plantilla (Meta los exige para aprobarla).
+agregarColumnaSiFalta('plantillas_solicitudes', "ejemplos_json TEXT NOT NULL DEFAULT '[]'");
 agregarColumnaSiFalta('campanas', 'fecha_programada TEXT');
 agregarColumnaSiFalta('campanas', 'contacto_ids_json TEXT');
 

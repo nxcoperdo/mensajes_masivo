@@ -929,11 +929,11 @@
       <details class="guia-seccion hidden" data-guia="plantillas">
         <summary>¿Cómo funciona esta sección?</summary>
         <ol class="guia-seccion-pasos">
-          <li><span class="section-header-badge">1</span><div><strong>Arma tu plantilla.</strong> Completa el formulario "Nueva solicitud de plantilla" con el texto que quieres mandar. WhatsApp solo permite enviar mensajes masivos con plantillas aprobadas por Meta.</div></li>
-          <li><span class="section-header-badge">2</span><div><strong>Nosotros la mandamos a Meta.</strong> Sigue el estado en "Mis solicitudes": <em>Pendiente</em> (la estamos revisando), <em>Esperando confirmación</em> (la está aprobando Meta), <em>Lista para enviar</em> (aprobada) o <em>Rechazada</em> (te contamos por qué).</div></li>
-          <li><span class="section-header-badge">3</span><div><strong>Úsala.</strong> Cuando esté "Lista para enviar", ve a <em>Nueva campaña</em> y elígela por su nombre.</div></li>
+          <li><span class="section-header-badge">1</span><div><strong>Arma tu plantilla.</strong> WhatsApp solo permite mensajes masivos con plantillas aprobadas por Meta. Elige un modelo o empieza en blanco, escribe tu mensaje y mira a la derecha cómo se verá. El panel "Revisión antes de enviar" te dice qué falta.</div></li>
+          <li><span class="section-header-badge">2</span><div><strong>Nosotros la mandamos a Meta.</strong> Sigue el estado en "Mis solicitudes": <em>Pendiente</em> (aún no la revisamos; puedes cancelarla), <em>Esperando confirmación</em> (Meta la está aprobando, suele tardar de minutos a un día), <em>Lista para enviar</em> (aprobada) o <em>Rechazada</em> (te contamos por qué y puedes duplicarla para corregirla).</div></li>
+          <li><span class="section-header-badge">3</span><div><strong>Úsala.</strong> Cuando esté "Lista para enviar", ve a <em>Nueva campaña</em> y elígela por su nombre: el texto y las variables aparecen solos.</div></li>
         </ol>
-        <p class="guia-seccion-tip">Tip: si todavía no tienes número de WhatsApp, te lo asignamos cuando aprobemos tu primera plantilla.</p>
+        <p class="guia-seccion-tip">Tip: si todavía no tienes número de WhatsApp, te lo asignamos cuando aprobemos tu primera plantilla. Las variables ({{1}}, {{2}}…) son datos que cambian por persona; los ejemplos que escribes solo sirven para que Meta la apruebe.</p>
       </details>
 
       <div id="cardMiPlan" class="card hidden">
@@ -994,90 +994,228 @@
         </a>
       </div>
 
-      <div class="card">
-        <h2>Nueva solicitud de plantilla</h2>
-        <p class="muted">
-          Ármala igual que en el creador de plantillas de Meta. La mandamos nosotros a Meta y te avisamos aquí
-          mismo el estado (pendiente, esperando confirmación, lista para enviar, etc.).
-        </p>
-        <form id="formSolicitudPlantilla">
-          <label for="inputPlantillaNombre">Nombre de la plantilla <span class="muted" style="font-weight: 400;">(minúsculas, sin espacios ni tildes — ej: <code>recordatorio_cita</code>)</span></label>
-          <input type="text" id="inputPlantillaNombre" pattern="[a-z0-9_]+" placeholder="ej: promo_septiembre" autocomplete="off" required />
+      <div class="plantilla-layout">
+        <div class="plantilla-col-form">
+          <form id="formSolicitudPlantilla" novalidate>
 
-          <div class="field-grid-2">
-            <div>
-              <label for="selectPlantillaCategoria">Categoría</label>
-              <select id="selectPlantillaCategoria" required>
-                <option value="MARKETING">Marketing</option>
-                <option value="UTILITY">Utilidad (transaccional)</option>
-                <option value="AUTHENTICATION">Autenticación (códigos)</option>
+            <div class="card">
+              <div class="section-header">
+                <span class="section-header-badge">1</span>
+                <div>
+                  <h3>Empieza con un modelo <span class="muted" style="font-weight: 400;">(opcional)</span></h3>
+                  <p>Elige uno parecido a lo que necesitas y cámbialo a tu gusto. Rellena todo el formulario por ti.</p>
+                </div>
+              </div>
+              <div id="modelosPlantilla" class="modelos-plantilla"></div>
+            </div>
+
+            <div class="card">
+              <div class="section-header">
+                <span class="section-header-badge">2</span>
+                <div>
+                  <h3>¿Para qué es tu mensaje?</h3>
+                  <p>Meta clasifica cada plantilla en un tipo. Esto define las reglas y lo que cuesta cada mensaje.</p>
+                </div>
+              </div>
+              <div class="categoria-grid" role="radiogroup" aria-label="Tipo de plantilla" id="categoriasPlantilla">
+                <label class="categoria-card">
+                  <input type="radio" name="categoriaPlantilla" value="MARKETING" />
+                  <span class="categoria-card-cuerpo">
+                    <span class="categoria-card-titulo">Marketing</span>
+                    <span class="categoria-card-desc">Promociones, ofertas, novedades, invitaciones a eventos o recuperar clientes.</span>
+                    <span class="categoria-card-ejemplo">«¡Hola Ana! Esta semana tienes 20% de descuento en tu primera compra.»</span>
+                    <span class="categoria-card-costo" data-costo-categoria="MARKETING"></span>
+                  </span>
+                </label>
+                <label class="categoria-card">
+                  <input type="radio" name="categoriaPlantilla" value="UTILITY" />
+                  <span class="categoria-card-cuerpo">
+                    <span class="categoria-card-titulo">Utilidad</span>
+                    <span class="categoria-card-desc">Recordatorios de citas, confirmaciones de pedido o pago, estado de un envío: algo que la persona ya pidió o espera.</span>
+                    <span class="categoria-card-ejemplo">«Hola Ana, te recordamos tu cita de mañana a las 3:00 p. m.»</span>
+                    <span class="categoria-card-costo" data-costo-categoria="UTILITY"></span>
+                  </span>
+                </label>
+                <label class="categoria-card">
+                  <input type="radio" name="categoriaPlantilla" value="AUTHENTICATION" />
+                  <span class="categoria-card-cuerpo">
+                    <span class="categoria-card-titulo">Autenticación</span>
+                    <span class="categoria-card-desc">Solo códigos de verificación de un solo uso. Meta fija el formato, no se puede escribir texto libre.</span>
+                    <span class="categoria-card-ejemplo">«Tu código de verificación es 123456.»</span>
+                    <span class="categoria-card-costo" data-costo-categoria="AUTHENTICATION"></span>
+                  </span>
+                </label>
+              </div>
+              <div class="info-note">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>
+                <p>Elige el tipo según lo que dice el mensaje, no según lo que te convenga: si Meta ve una promoción en una plantilla de Utilidad, la cambia de tipo o la rechaza.</p>
+              </div>
+              <p id="errorPlantillaCategoria" class="error-text hidden" role="alert"></p>
+            </div>
+
+            <div class="card">
+              <div class="section-header">
+                <span class="section-header-badge">3</span>
+                <div>
+                  <h3>Nombre e idioma</h3>
+                  <p>El nombre es solo interno: tus clientes nunca lo ven. Lo usarás para elegirla en "Nueva campaña".</p>
+                </div>
+              </div>
+              <div class="field-grid-2 field-grid-nombre">
+                <div>
+                  <label for="inputPlantillaNombre">Nombre de la plantilla <span class="campo-requerido" aria-hidden="true">*</span></label>
+                  <input type="text" id="inputPlantillaNombre" placeholder="ej: recordatorio de cita" autocomplete="off" maxlength="80" aria-describedby="ayudaPlantillaNombre" />
+                  <p id="ayudaPlantillaNombre" class="param-ayuda" role="status" aria-live="polite">Escríbelo como quieras: lo convertimos al formato que pide Meta (minúsculas, sin tildes ni espacios).</p>
+                </div>
+                <div>
+                  <label for="selectPlantillaIdioma">Idioma del texto</label>
+                  <select id="selectPlantillaIdioma">
+                    <option value="es">Español</option>
+                    <option value="es_CO">Español (Colombia)</option>
+                    <option value="es_MX">Español (México)</option>
+                    <option value="es_ES">Español (España)</option>
+                    <option value="es_AR">Español (Argentina)</option>
+                    <option value="en">Inglés</option>
+                    <option value="en_US">Inglés (EE. UU.)</option>
+                    <option value="pt_BR">Portugués (Brasil)</option>
+                  </select>
+                </div>
+              </div>
+              <p class="muted ayuda-pequena">El idioma tiene que coincidir con el idioma en que escribes el mensaje. El nombre no se puede cambiar después: si te equivocas, se pide una plantilla nueva.</p>
+            </div>
+
+            <div class="card">
+              <div class="section-header">
+                <span class="section-header-badge">4</span>
+                <div>
+                  <h3>Escribe tu mensaje</h3>
+                  <p>Mira la vista previa mientras escribes: así lo verá tu cliente.</p>
+                </div>
+              </div>
+
+              <label for="selectPlantillaHeaderTipo">Encabezado <span class="muted" style="font-weight: 400;">(opcional — lo primero que se ve, arriba del mensaje)</span></label>
+              <select id="selectPlantillaHeaderTipo" aria-describedby="ayudaPlantillaHeader">
+                <option value="NONE">Sin encabezado</option>
+                <option value="TEXT">Texto corto</option>
+                <option value="IMAGE">Imagen</option>
+                <option value="VIDEO">Video</option>
+                <option value="DOCUMENT">Documento (PDF)</option>
               </select>
+              <p id="ayudaPlantillaHeader" class="param-ayuda">Un encabezado ayuda a llamar la atención, pero no es obligatorio.</p>
+
+              <div id="campoPlantillaHeaderTexto" class="hidden">
+                <label for="inputPlantillaHeaderTexto">Texto del encabezado</label>
+                <input type="text" id="inputPlantillaHeaderTexto" maxlength="60" autocomplete="off" placeholder="ej: Tu cita está confirmada" />
+                <p class="muted contador-caracteres" id="contadorPlantillaHeader" aria-live="polite">0 / 60 · sin variables</p>
+              </div>
+
+              <div id="campoPlantillaHeaderMuestra" class="hidden">
+                <label for="inputPlantillaMuestra">Archivo de muestra <span class="campo-requerido" aria-hidden="true">*</span></label>
+                <div class="file-picker">
+                  <label for="inputPlantillaMuestra" class="file-picker-label">Seleccionar archivo</label>
+                  <span class="file-picker-name" id="inputPlantillaMuestraNombre">Ningún archivo seleccionado</span>
+                </div>
+                <input type="file" id="inputPlantillaMuestra" accept=".jpg,.jpeg,.png,.mp4,.3gp,.3gpp,.pdf" class="sr-only" />
+                <p id="ayudaPlantillaMuestra" class="param-ayuda"></p>
+              </div>
+
+              <label for="inputPlantillaBody" style="margin-top: 16px;">Cuerpo del mensaje <span class="campo-requerido" aria-hidden="true">*</span></label>
+              <div class="editor-barra">
+                <button type="button" id="btnInsertarVariable" class="btn btn-sm btn-outline">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                  Insertar variable
+                </button>
+                <span class="muted ayuda-pequena">Una variable es un dato que cambia por persona (nombre, fecha…). Se escribe <code>{{1}}</code>, <code>{{2}}</code>…</span>
+              </div>
+              <textarea id="inputPlantillaBody" maxlength="1024" rows="6" aria-describedby="contadorPlantillaBody ayudaPlantillaBody" placeholder="ej: Hola {{1}}, te recordamos tu cita del {{2}}. ¡Te esperamos!"></textarea>
+              <div class="editor-pie">
+                <p id="ayudaPlantillaBody" class="param-ayuda" role="status" aria-live="polite"></p>
+                <p class="muted contador-caracteres" id="contadorPlantillaBody" aria-live="polite">0 / 1024</p>
+              </div>
+
+              <label for="inputPlantillaFooter" style="margin-top: 12px;">Pie <span class="muted" style="font-weight: 400;">(opcional — una línea pequeña y gris al final, ej: el nombre de tu negocio)</span></label>
+              <input type="text" id="inputPlantillaFooter" maxlength="60" autocomplete="off" placeholder="ej: Clínica Sonrisa" />
+              <p class="muted contador-caracteres" id="contadorPlantillaFooter" aria-live="polite">0 / 60 · sin variables ni enlaces</p>
             </div>
-            <div>
-              <label for="inputPlantillaIdioma">Idioma</label>
-              <input type="text" id="inputPlantillaIdioma" value="es" autocomplete="off" />
+
+            <div class="card" id="cardEjemplosPlantilla">
+              <div class="section-header">
+                <span class="section-header-badge">5</span>
+                <div>
+                  <h3>Ejemplos de tus variables</h3>
+                  <p>Meta pide un ejemplo real de cada variable para aprobar la plantilla.</p>
+                </div>
+              </div>
+              <div id="ejemplosVacio" class="info-note">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>
+                <p>Tu mensaje todavía no tiene variables, así que no necesitas ejemplos. Si quieres personalizarlo (por ejemplo con el nombre), usa el botón «Insertar variable» del paso 4.</p>
+              </div>
+              <div id="ejemplosVariables"></div>
+              <p id="ejemplosNota" class="muted ayuda-pequena hidden">Los ejemplos <strong>no se envían</strong> a tus clientes: solo sirven para que Meta entienda qué va en cada hueco. Después, al lanzar la campaña, eliges qué dato real va en cada variable.</p>
             </div>
+
+            <div class="card">
+              <div class="section-header">
+                <span class="section-header-badge">6</span>
+                <div>
+                  <h3>Botones <span class="muted" style="font-weight: 400;">(opcional)</span></h3>
+                  <p>Debajo del mensaje: respuestas rápidas, un enlace o un teléfono para llamar.</p>
+                </div>
+              </div>
+              <p id="resumenLimitesBotones" class="muted ayuda-pequena">Puedes agregar hasta 3 de respuesta rápida, 2 de enlace y 1 de llamada.</p>
+              <div id="listaBotonesPlantilla"></div>
+              <button id="btnAgregarBotonPlantilla" type="button" class="btn-dashed">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                Agregar botón
+              </button>
+            </div>
+
+            <div class="card">
+              <div class="section-header">
+                <span class="section-header-badge">7</span>
+                <div>
+                  <h3>Nota para nuestro equipo <span class="muted" style="font-weight: 400;">(opcional)</span></h3>
+                  <p>¿Algo que debamos saber al revisarla? Ej: «es para clientes que agendaron por la web».</p>
+                </div>
+              </div>
+              <label for="inputPlantillaNota" class="sr-only">Nota para el equipo</label>
+              <textarea id="inputPlantillaNota" rows="2" maxlength="300" placeholder="Escribe aquí si necesitas aclarar algo"></textarea>
+            </div>
+          </form>
+        </div>
+
+        <aside class="plantilla-col-preview" aria-label="Vista previa y revisión">
+          <div class="card">
+            <h3 class="preview-titulo">Así lo verá tu cliente <span class="muted" style="font-weight: 400;">(aproximado)</span></h3>
+            <div id="waPreview" class="wa-preview"></div>
           </div>
 
-          <label for="selectPlantillaHeaderTipo">Encabezado</label>
-          <select id="selectPlantillaHeaderTipo">
-            <option value="NONE">Ninguno</option>
-            <option value="TEXT">Texto</option>
-            <option value="IMAGE">Imagen</option>
-            <option value="VIDEO">Video</option>
-            <option value="DOCUMENT">Documento</option>
-          </select>
-
-          <div id="campoPlantillaHeaderTexto" class="hidden">
-            <label for="inputPlantillaHeaderTexto">Texto del encabezado (máx. 60 caracteres)</label>
-            <input type="text" id="inputPlantillaHeaderTexto" maxlength="60" autocomplete="off" />
-          </div>
-
-          <div id="campoPlantillaHeaderMuestra" class="hidden">
-            <label for="inputPlantillaMuestra">Archivo de muestra (imagen .jpg/.png, video .mp4/.3gp, o documento)</label>
-            <div class="file-picker">
-              <label for="inputPlantillaMuestra" class="file-picker-label">Seleccionar archivo</label>
-              <span class="file-picker-name" id="inputPlantillaMuestraNombre">Ningún archivo seleccionado</span>
-            </div>
-            <input type="file" id="inputPlantillaMuestra" accept=".jpg,.jpeg,.png,.mp4,.3gp,.3gpp,.pdf" class="sr-only" />
-          </div>
-
-          <label for="inputPlantillaBody">Cuerpo del mensaje <span class="muted" style="font-weight: 400;">(usa <code>{{1}}</code>, <code>{{2}}</code>… para variables)</span></label>
-          <textarea id="inputPlantillaBody" maxlength="1024" rows="4" required></textarea>
-          <p class="muted contador-caracteres" id="contadorPlantillaBody">0 / 1024</p>
-
-          <label for="inputPlantillaFooter">Pie (opcional, máx. 60 caracteres)</label>
-          <input type="text" id="inputPlantillaFooter" maxlength="60" autocomplete="off" />
-
-          <h3>Botones (opcional)</h3>
-          <p class="muted">Hasta 3 de respuesta rápida, 2 de URL y 1 de llamada telefónica.</p>
-          <div id="listaBotonesPlantilla"></div>
-          <button id="btnAgregarBotonPlantilla" type="button" class="btn-dashed">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
-            Agregar botón
-          </button>
-
-          <div class="send-bar">
-            <button type="submit" class="btn btn-primary btn-lg">
+          <div class="card">
+            <h3 class="preview-titulo">Revisión antes de enviar</h3>
+            <ul id="checklistPlantilla" class="checklist-envio"></ul>
+            <p id="motivoBloqueoPlantilla" class="muted ayuda-pequena" role="status"></p>
+            <button type="submit" form="formSolicitudPlantilla" id="btnEnviarSolicitudPlantilla" class="btn btn-primary btn-lg btn-bloque">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg>
               Enviar solicitud
             </button>
+            <div id="solicitudPlantillaResultado" class="result-box hidden" role="status"></div>
           </div>
-        </form>
-        <div id="solicitudPlantillaResultado" class="result-box hidden"></div>
+        </aside>
       </div>
 
-      <div class="card">
+      <div class="card" id="cardMisSolicitudes">
         <h2>Mis solicitudes (<span id="totalMisPlantillas">0</span>)</h2>
+        <p class="muted">Aquí ves en qué paso va cada plantilla. Toca una fila para ver el detalle, el motivo si fue rechazada, o para pedirla de nuevo con cambios.</p>
         <div class="table-wrap">
           <table class="tabla">
             <thead>
               <tr>
                 <th>Nombre</th>
-                <th>Categoría</th>
-                <th>Número asignado</th>
+                <th>Tipo</th>
                 <th>Estado</th>
+                <th>Qué sigue</th>
                 <th>Fecha</th>
+                <th></th>
               </tr>
             </thead>
             <tbody id="tablaMisPlantillas"></tbody>
@@ -1324,6 +1462,18 @@
         <a id="modalCuotaPlanRecargar" href="#" target="_blank" rel="noopener" class="btn btn-outline">Recargar</a>
         <button type="button" id="modalCuotaPlanEnviar" class="btn btn-primary">Enviar mensajes</button>
         <button type="button" id="modalCuotaPlanCancelar" class="btn btn-sm btn-outline">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modalDetallePlantilla" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modalDetallePlantillaTitulo">
+    <div class="modal-card card modal-resumen">
+      <h3 id="modalDetallePlantillaTitulo">Detalle de la solicitud</h3>
+      <div id="modalDetallePlantillaCuerpo" class="resumen-envio"></div>
+      <div class="modal-acciones">
+        <button type="button" id="modalDetallePlantillaCancelarSolicitud" class="btn btn-sm btn-danger hidden">Cancelar solicitud</button>
+        <button type="button" id="modalDetallePlantillaDuplicar" class="btn btn-outline">Duplicar y corregir</button>
+        <button type="button" id="modalDetallePlantillaCerrar" class="btn btn-primary">Cerrar</button>
       </div>
     </div>
   </div>

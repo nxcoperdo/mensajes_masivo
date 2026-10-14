@@ -1912,12 +1912,14 @@ function htmlResumenEnvio({ template_nombre, idioma, cuerpo, lista, individual, 
 }
 
 /** Abre el modal de revisión y resuelve `true` si el usuario confirma, `false` si vuelve a corregir (botón, Esc o clic fuera). */
-function confirmarEnModal({ cuerpoHtml, textoConfirmar }) {
+function confirmarEnModal({ cuerpoHtml, textoConfirmar, titulo = 'Revisa antes de enviar', textoVolver = 'Volver y corregir' }) {
   const modal = document.getElementById('modalResumenEnvio');
   const btnConfirmar = document.getElementById('modalResumenEnvioConfirmar');
   const btnVolver = document.getElementById('modalResumenEnvioVolver');
   const previoFoco = document.activeElement;
   document.getElementById('modalResumenEnvioCuerpo').innerHTML = cuerpoHtml;
+  document.getElementById('modalResumenEnvioTitulo').textContent = titulo;
+  btnVolver.textContent = textoVolver;
   btnConfirmar.textContent = textoConfirmar;
   modal.classList.remove('hidden');
   btnConfirmar.focus();
@@ -3616,116 +3618,641 @@ const ETIQUETAS_ESTADO_PLANTILLA = {
   cancelada: 'Cancelada',
 };
 
+const ETIQUETAS_CATEGORIA_PLANTILLA = { MARKETING: 'Marketing', UTILITY: 'Utilidad', AUTHENTICATION: 'Autenticación' };
+
+// Qué significa cada estado y qué puede hacer el cliente, en palabras simples.
+const QUE_SIGUE_PLANTILLA = {
+  pendiente: 'Aún no empezamos a revisarla. Puedes cancelarla o duplicarla para cambiarla.',
+  esperando_confirmacion: 'Ya la enviamos a Meta. Suele tardar de unos minutos a un día.',
+  lista_para_enviar: 'Aprobada. Elígela por su nombre en «Nueva campaña».',
+  rechazada: 'Meta no la aprobó. Abre el detalle para ver por qué y duplícala para corregirla.',
+  cancelada: 'Cancelada: no se enviará a Meta.',
+};
+
+// Mismos límites que valida el servidor (plantillas.js) y que exige Meta.
+const LIMITES_BOTONES_PLANTILLA = { QUICK_REPLY: 3, URL: 2, PHONE_NUMBER: 1 };
+const ETIQUETAS_BOTON_PLANTILLA = {
+  QUICK_REPLY: 'Respuesta rápida (el cliente toca y responde)',
+  URL: 'Enlace a un sitio web',
+  PHONE_NUMBER: 'Llamar a un teléfono',
+};
+const MAX_BODY_PLANTILLA = 1024;
+const MAX_MUESTRA_BYTES = { IMAGE: 5 * 1024 * 1024, VIDEO: 16 * 1024 * 1024 };
+const SUGERENCIAS_EJEMPLO = ['Un nombre (ej: Ana)', 'Una fecha (ej: 25 de octubre)', 'Una hora (ej: 3:00 p. m.)', 'Otro dato (ej: 10458)'];
+
+const AYUDA_ENCABEZADO_PLANTILLA = {
+  NONE: 'Un encabezado ayuda a llamar la atención, pero no es obligatorio.',
+  TEXT: 'Una línea corta en negrita arriba del mensaje. Máx. 60 caracteres y sin variables.',
+  IMAGE: 'Sube una imagen de muestra .jpg o .png (máx. 5 MB). Meta la usa para aprobar la plantilla; en cada campaña podrás enviar otra.',
+  VIDEO: 'Sube un video de muestra .mp4 o .3gp (máx. 16 MB). En cada campaña podrás enviar otro.',
+  DOCUMENT: 'Sube un PDF de muestra. En cada campaña podrás enviar otro.',
+};
+
+/** Modelos para empezar: rellenan todo el formulario (incluidos los ejemplos de las variables). */
+const MODELOS_PLANTILLA = [
+  {
+    id: 'cita', titulo: 'Recordatorio de cita', descripcion: 'Avisa a tus clientes de su cita',
+    categoria: 'UTILITY', nombre: 'recordatorio_cita', idioma: 'es', header_tipo: 'NONE', header_texto: '',
+    body: 'Hola {{1}}, te recordamos tu cita del {{2}} a las {{3}}. Si no puedes asistir, avísanos para reprogramarla.',
+    footer: 'Gracias por confiar en nosotros', ejemplos: ['Ana', '25 de octubre', '3:00 p. m.'],
+    botones: [{ tipo: 'QUICK_REPLY', texto: 'Confirmar asistencia' }, { tipo: 'QUICK_REPLY', texto: 'Reprogramar' }],
+  },
+  {
+    id: 'pedido', titulo: 'Confirmación de pedido', descripcion: 'Confirma una compra o un pago',
+    categoria: 'UTILITY', nombre: 'confirmacion_pedido', idioma: 'es', header_tipo: 'NONE', header_texto: '',
+    body: 'Hola {{1}}, recibimos tu pedido n.º {{2}}. Te avisaremos cuando salga hacia tu dirección. ¡Gracias por tu compra!',
+    footer: '', ejemplos: ['Carlos', '10458'],
+    botones: [{ tipo: 'URL', texto: 'Ver mi pedido', url: 'https://tutienda.com/pedidos' }],
+  },
+  {
+    id: 'promo', titulo: 'Promoción', descripcion: 'Una oferta con enlace',
+    categoria: 'MARKETING', nombre: 'promo_semana', idioma: 'es', header_tipo: 'TEXT', header_texto: 'Oferta de la semana',
+    body: '¡Hola {{1}}! Esta semana tienes {{2}} de descuento en toda la tienda. Aprovéchalo hasta el domingo.',
+    footer: 'Responde NO para dejar de recibir ofertas', ejemplos: ['Laura', '20%'],
+    botones: [{ tipo: 'URL', texto: 'Ver ofertas', url: 'https://tutienda.com/ofertas' }, { tipo: 'QUICK_REPLY', texto: 'No recibir más' }],
+  },
+  {
+    id: 'bienvenida', titulo: 'Bienvenida', descripcion: 'Saluda a un cliente nuevo',
+    categoria: 'MARKETING', nombre: 'bienvenida_cliente', idioma: 'es', header_tipo: 'NONE', header_texto: '',
+    body: 'Hola {{1}}, ¡bienvenido! Estamos para ayudarte con lo que necesites. Escríbenos cuando quieras.',
+    footer: '', ejemplos: ['Marta'],
+    botones: [{ tipo: 'QUICK_REPLY', texto: 'Hablar con un asesor' }],
+  },
+];
+
+let ejemplosPlantilla = []; // un ejemplo por variable {{N}} del cuerpo
+let urlMuestraPlantilla = null; // object URL de la muestra elegida (para la vista previa)
+let cuerpoPlantillaTocado = false; // los errores del cuerpo se muestran tras salir del campo, no mientras se escribe
+let solicitudesPlantillaCache = [];
+
+const $pl = (id) => document.getElementById(id);
+
+/** "Mi Promo 2026" → "mi_promo_2026" (el formato que pide Meta). */
+function normalizarNombrePlantilla(texto) {
+  return String(texto || '')
+    .trim().toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[\s-]+/g, '_')
+    .replace(/[^a-z0-9_]/g, '')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+}
+
+/** Números de variable distintos y ordenados que aparecen en un texto. */
+function variablesDistintas(texto) {
+  const nums = new Set();
+  String(texto || '').replace(/\{\{\s*(\d+)\s*\}\}/g, (_, n) => { nums.add(Number(n)); return ''; });
+  return Array.from(nums).sort((a, b) => a - b);
+}
+
+/** Reglas de Meta sobre el cuerpo (las mismas que valida el servidor). Devuelve { errores, avisos, cantidad }. */
+function analizarCuerpoPlantilla(cuerpo) {
+  const errores = [];
+  const avisos = [];
+  const nums = variablesDistintas(cuerpo);
+  for (let i = 0; i < nums.length; i += 1) {
+    if (nums[i] !== i + 1) {
+      errores.push(`Las variables van en orden y sin saltos ({{1}}, {{2}}, {{3}}…). Falta {{${i + 1}}} antes de {{${nums[i]}}}.`);
+      break;
+    }
+  }
+  if (nums.length > 0) {
+    if (/^\s*\{\{\s*\d+\s*\}\}/.test(cuerpo)) errores.push('El mensaje no puede empezar con una variable. Escribe antes un saludo o una palabra (ej: «Hola {{1}}»).');
+    if (/\{\{\s*\d+\s*\}\}\s*$/.test(cuerpo)) errores.push('El mensaje no puede terminar con una variable. Agrega después un punto o una frase.');
+    if (/\}\}\{\{/.test(cuerpo)) errores.push('Dos variables no pueden ir pegadas ({{1}}{{2}}). Sepáralas con texto o un espacio.');
+    const palabras = cuerpo.replace(/\{\{\s*\d+\s*\}\}/g, ' ').split(/\s+/).filter(Boolean).length;
+    if (palabras < nums.length * 3) avisos.push('Tienes muchas variables para tan poco texto: Meta suele rechazar eso. Agrega más texto fijo alrededor.');
+  }
+  return { errores, avisos, cantidad: nums.length };
+}
+
+function categoriaPlantillaElegida() {
+  return document.querySelector('input[name="categoriaPlantilla"]:checked')?.value || '';
+}
+
+/** Lee todo el formulario en un solo objeto (la vista previa, la revisión y el envío usan este mismo). */
+function leerFormularioPlantilla() {
+  const body = $pl('inputPlantillaBody').value;
+  const cantidad = analizarCuerpoPlantilla(body).cantidad;
+  return {
+    categoria: categoriaPlantillaElegida(),
+    nombreEscrito: $pl('inputPlantillaNombre').value,
+    nombre: normalizarNombrePlantilla($pl('inputPlantillaNombre').value),
+    idioma: $pl('selectPlantillaIdioma').value,
+    headerTipo: $pl('selectPlantillaHeaderTipo').value,
+    headerTexto: $pl('inputPlantillaHeaderTexto').value.trim(),
+    muestra: $pl('inputPlantillaMuestra').files[0] || null,
+    body: body.trim(),
+    footer: $pl('inputPlantillaFooter').value.trim(),
+    ejemplos: Array.from({ length: cantidad }, (_, i) => String(ejemplosPlantilla[i] ?? '').trim()),
+    botones: botonesPlantilla.map((b) => ({ ...b })),
+    nota: $pl('inputPlantillaNota').value.trim(),
+  };
+}
+
+/** Problemas de un botón concreto, en palabras claras (o '' si está bien). */
+function errorDeBoton(b) {
+  if (!String(b.texto || '').trim()) return 'Escribe el texto del botón (lo que verá tu cliente).';
+  if (b.tipo === 'URL' && !/^https?:\/\/\S+\.\S+$/i.test(String(b.url || '').trim())) return 'El enlace debe empezar por https:// (ej: https://tutienda.com).';
+  if (b.tipo === 'PHONE_NUMBER' && !/^\d{8,15}$/.test(String(b.telefono || '').trim().replace(/^\+/, ''))) return 'El teléfono lleva código de país y solo números (ej: 573001234567).';
+  return '';
+}
+
+/** Error de la muestra del encabezado (tipo de archivo o peso) o ''. */
+function errorMuestraPlantilla(f) {
+  if (!f.muestra) return '';
+  const nombre = f.muestra.name.toLowerCase();
+  const permitidos = { IMAGE: /\.(jpe?g|png)$/, VIDEO: /\.(mp4|3gpp?)$/, DOCUMENT: /\.pdf$/ }[f.headerTipo];
+  if (permitidos && !permitidos.test(nombre)) return 'Ese archivo no corresponde al tipo de encabezado elegido.';
+  const max = MAX_MUESTRA_BYTES[f.headerTipo];
+  if (max && f.muestra.size > max) return `El archivo pesa ${(f.muestra.size / 1048576).toFixed(1)} MB y el máximo es ${max / 1048576} MB.`;
+  return '';
+}
+
+/**
+ * Lista de revisión: qué está bien (ok), qué conviene mirar (aviso) y qué
+ * impide enviar (error). `campo` es el selector al que lleva el botón "Ir".
+ */
+function calcularChecklistPlantilla(f) {
+  const items = [];
+  const analisis = analizarCuerpoPlantilla(f.body);
+
+  items.push(f.categoria
+    ? { nivel: 'ok', texto: `Tipo: ${ETIQUETAS_CATEGORIA_PLANTILLA[f.categoria]}` }
+    : { nivel: 'error', texto: 'Elige el tipo de plantilla (paso 2)', campo: '#categoriasPlantilla input' });
+
+  if (!f.nombre) items.push({ nivel: 'error', texto: 'Ponle un nombre (paso 3)', campo: '#inputPlantillaNombre' });
+  else items.push({ nivel: 'ok', texto: `Nombre: ${f.nombre}` });
+
+  if (!f.body) items.push({ nivel: 'error', texto: 'Escribe el mensaje (paso 4)', campo: '#inputPlantillaBody' });
+  else if (analisis.errores.length > 0) items.push({ nivel: 'error', texto: analisis.errores[0], campo: '#inputPlantillaBody' });
+  else items.push({ nivel: 'ok', texto: `Mensaje escrito (${f.body.length} de ${MAX_BODY_PLANTILLA} caracteres)` });
+
+  if (f.body && analisis.errores.length === 0 && analisis.cantidad > 0) {
+    const faltan = f.ejemplos.map((e, i) => (e ? 0 : i + 1)).filter(Boolean);
+    items.push(faltan.length > 0
+      ? { nivel: 'error', texto: `Falta el ejemplo de ${faltan.map((n) => `{{${n}}}`).join(', ')} (paso 5)`, campo: `#ejemplosVariables [data-ejemplo="${faltan[0] - 1}"]` }
+      : { nivel: 'ok', texto: `${analisis.cantidad} ${analisis.cantidad === 1 ? 'variable con ejemplo' : 'variables con ejemplo'}` });
+  }
+
+  if (f.headerTipo === 'TEXT') {
+    if (!f.headerTexto) items.push({ nivel: 'error', texto: 'Escribe el texto del encabezado o quítalo', campo: '#inputPlantillaHeaderTexto' });
+    else if (/\{\{/.test(f.headerTexto)) items.push({ nivel: 'error', texto: 'El encabezado no puede llevar variables', campo: '#inputPlantillaHeaderTexto' });
+    else items.push({ nivel: 'ok', texto: 'Encabezado de texto listo' });
+  } else if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(f.headerTipo)) {
+    const errMuestra = errorMuestraPlantilla(f);
+    if (!f.muestra) items.push({ nivel: 'error', texto: 'Sube el archivo de muestra del encabezado', campo: '#inputPlantillaMuestra' });
+    else if (errMuestra) items.push({ nivel: 'error', texto: errMuestra, campo: '#inputPlantillaMuestra' });
+    else items.push({ nivel: 'ok', texto: 'Archivo de muestra listo' });
+  }
+
+  if (/\{\{/.test(f.footer)) items.push({ nivel: 'error', texto: 'El pie no puede llevar variables', campo: '#inputPlantillaFooter' });
+
+  const botonMal = f.botones.findIndex((b) => errorDeBoton(b));
+  if (botonMal >= 0) items.push({ nivel: 'error', texto: `Botón ${botonMal + 1}: ${errorDeBoton(f.botones[botonMal])}`, campo: `#listaBotonesPlantilla [data-fila-boton="${botonMal}"] input` });
+  else if (f.botones.length > 0) items.push({ nivel: 'ok', texto: `${f.botones.length} ${f.botones.length === 1 ? 'botón completo' : 'botones completos'}` });
+
+  // Avisos: no bloquean, pero evitan rechazos comunes.
+  analisis.avisos.forEach((a) => items.push({ nivel: 'aviso', texto: a, campo: '#inputPlantillaBody' }));
+  if (f.categoria === 'AUTHENTICATION') {
+    items.push({ nivel: 'aviso', texto: 'Autenticación es solo para códigos de verificación. Meta suele exigir su formato fijo; si tu mensaje no es un código, elige Utilidad.', campo: '#categoriasPlantilla input' });
+  }
+  if (f.categoria === 'MARKETING' && !f.botones.some((b) => b.tipo === 'QUICK_REPLY') && !f.footer) {
+    items.push({ nivel: 'aviso', texto: 'En Marketing conviene dar una forma de dejar de recibir mensajes (un botón «No recibir más» o un pie que lo explique). Evita reportes de spam.', campo: '#listaBotonesPlantilla' });
+  }
+  return items;
+}
+
+const ICONO_CHECK_PL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10" /></svg>';
+const ICONO_ALERTA_PL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8v5M12 17h.01" /><circle cx="12" cy="12" r="9" /></svg>';
+const ICONO_X_PL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>';
+const ICONOS_BOTON_WA = {
+  QUICK_REPLY: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5" /><path d="M20 20v-7a4 4 0 0 0-4-4H4" /></svg>',
+  URL: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg>',
+  PHONE_NUMBER: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.2a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2Z" /></svg>',
+};
+
+/** Burbuja de WhatsApp con encabezado, cuerpo, pie y botones. La usan el formulario y el detalle de una solicitud. */
+function htmlVistaPreviaPlantilla({ headerTipo, headerTexto, headerUrl, body, footer, ejemplos, botones }) {
+  let header = '';
+  if (headerTipo === 'TEXT' && headerTexto) {
+    header = `<div class="wa-header-texto">${escapeHtml(headerTexto)}</div>`;
+  } else if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerTipo)) {
+    const etiqueta = { IMAGE: 'Imagen', VIDEO: 'Video', DOCUMENT: 'Documento' }[headerTipo];
+    if (headerUrl && headerTipo === 'IMAGE') header = `<img class="wa-header-media" src="${escapeHtml(headerUrl)}" alt="Imagen del encabezado" />`;
+    else if (headerUrl && headerTipo === 'VIDEO') header = `<video class="wa-header-media" src="${escapeHtml(headerUrl)}" muted preload="metadata"></video>`;
+    else header = `<div class="wa-header-vacio">${etiqueta} del encabezado</div>`;
+  }
+
+  const cuerpoHtml = body
+    ? htmlCuerpoPlantilla(body, ejemplos).replace(/\*([^*\n]+)\*/g, '<strong>$1</strong>')
+    : '<span class="wa-vacio">Aquí aparecerá tu mensaje…</span>';
+  const pie = footer ? `<div class="wa-pie">${escapeHtml(footer)}</div>` : '';
+  const hora = new Date().toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' });
+  const botonesHtml = (botones || []).map((b) => `
+    <div class="wa-boton">${ICONOS_BOTON_WA[b.tipo] || ''}<span>${b.texto ? escapeHtml(b.texto) : 'Texto del botón'}</span></div>`).join('');
+
+  return `
+    <div class="wa-chat">
+      <div class="wa-burbuja">
+        ${header}
+        <div class="wa-cuerpo">${cuerpoHtml}</div>
+        ${pie}
+        <div class="wa-hora">${hora}</div>
+      </div>
+      ${botonesHtml ? `<div class="wa-botones">${botonesHtml}</div>` : ''}
+    </div>`;
+}
+
+// ---------- Botones ----------
+
+function conteoBotonesPlantilla(excluirIdx = -1) {
+  const conteo = { QUICK_REPLY: 0, URL: 0, PHONE_NUMBER: 0 };
+  botonesPlantilla.forEach((b, i) => { if (i !== excluirIdx) conteo[b.tipo] += 1; });
+  return conteo;
+}
+
 function renderBotonesPlantilla() {
-  const cont = document.getElementById('listaBotonesPlantilla');
+  const cont = $pl('listaBotonesPlantilla');
   cont.innerHTML = '';
   botonesPlantilla.forEach((b, idx) => {
-    const row = document.createElement('div');
-    row.className = 'param-row';
-    row.innerHTML = `
-      <span class="param-index">${idx + 1}</span>
-      <select data-idx="${idx}" class="boton-tipo">
-        <option value="QUICK_REPLY" ${b.tipo === 'QUICK_REPLY' ? 'selected' : ''}>Respuesta rápida</option>
-        <option value="URL" ${b.tipo === 'URL' ? 'selected' : ''}>Ir a un sitio (URL)</option>
-        <option value="PHONE_NUMBER" ${b.tipo === 'PHONE_NUMBER' ? 'selected' : ''}>Llamar a un número</option>
-      </select>
-      <input type="text" data-idx="${idx}" class="boton-texto" placeholder="Texto del botón" value="${escapeHtml(b.texto || '')}" maxlength="25" />
-      <input type="text" data-idx="${idx}" class="boton-url" placeholder="https://…" value="${escapeHtml(b.url || '')}" ${b.tipo === 'URL' ? '' : 'disabled'} />
-      <input type="text" data-idx="${idx}" class="boton-telefono" placeholder="Teléfono (ej: 3001234567)" value="${escapeHtml(b.telefono || '')}" ${b.tipo === 'PHONE_NUMBER' ? '' : 'disabled'} />
-      <button type="button" class="btn-danger-sm" data-remove="${idx}" title="Quitar" aria-label="Quitar botón ${idx + 1}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
-      </button>
-    `;
-    cont.appendChild(row);
+    const otros = conteoBotonesPlantilla(idx);
+    const opcion = (tipo) => {
+      const lleno = otros[tipo] >= LIMITES_BOTONES_PLANTILLA[tipo];
+      return `<option value="${tipo}" ${b.tipo === tipo ? 'selected' : ''} ${lleno ? 'disabled' : ''}>${ETIQUETAS_BOTON_PLANTILLA[tipo]}${lleno ? ' — límite alcanzado' : ''}</option>`;
+    };
+    const fila = document.createElement('div');
+    fila.className = 'param-fila';
+    fila.dataset.filaBoton = idx;
+    fila.innerHTML = `
+      <div class="param-row">
+        <span class="param-index" aria-hidden="true">${idx + 1}</span>
+        <select data-idx="${idx}" class="boton-tipo" aria-label="Tipo del botón ${idx + 1}">${opcion('QUICK_REPLY')}${opcion('URL')}${opcion('PHONE_NUMBER')}</select>
+        <input type="text" data-idx="${idx}" class="boton-texto" placeholder="Texto del botón (máx. 25)" value="${escapeHtml(b.texto || '')}" maxlength="25" aria-label="Texto del botón ${idx + 1}" />
+        <input type="text" data-idx="${idx}" class="boton-url ${b.tipo === 'URL' ? '' : 'hidden'}" placeholder="https://tusitio.com" value="${escapeHtml(b.url || '')}" aria-label="Enlace del botón ${idx + 1}" />
+        <input type="text" data-idx="${idx}" class="boton-telefono ${b.tipo === 'PHONE_NUMBER' ? '' : 'hidden'}" inputmode="tel" placeholder="573001234567" value="${escapeHtml(b.telefono || '')}" aria-label="Teléfono del botón ${idx + 1}" />
+        <button type="button" class="btn-danger-sm" data-remove="${idx}" title="Quitar" aria-label="Quitar botón ${idx + 1}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
+        </button>
+      </div>
+      <div class="param-ayuda" data-ayuda-boton="${idx}" role="status"></div>`;
+    cont.appendChild(fila);
   });
 
   cont.querySelectorAll('.boton-tipo').forEach((sel) => {
     sel.addEventListener('change', (e) => {
       botonesPlantilla[Number(e.target.dataset.idx)].tipo = e.target.value;
       renderBotonesPlantilla();
+      actualizarFormularioPlantilla();
     });
   });
-  cont.querySelectorAll('.boton-texto').forEach((inp) => {
-    inp.addEventListener('input', (e) => { botonesPlantilla[Number(e.target.dataset.idx)].texto = e.target.value; });
+  const enlazar = (clase, campo) => cont.querySelectorAll(clase).forEach((inp) => {
+    inp.addEventListener('input', (e) => {
+      botonesPlantilla[Number(e.target.dataset.idx)][campo] = e.target.value;
+      actualizarFormularioPlantilla();
+    });
+    inp.addEventListener('blur', (e) => {
+      const idx = Number(e.target.dataset.idx);
+      const ayuda = cont.querySelector(`[data-ayuda-boton="${idx}"]`);
+      const err = errorDeBoton(botonesPlantilla[idx]);
+      ayuda.textContent = err;
+      ayuda.className = `param-ayuda${err ? ' param-ayuda-error' : ''}`;
+    });
   });
-  cont.querySelectorAll('.boton-url').forEach((inp) => {
-    inp.addEventListener('input', (e) => { botonesPlantilla[Number(e.target.dataset.idx)].url = e.target.value; });
-  });
-  cont.querySelectorAll('.boton-telefono').forEach((inp) => {
-    inp.addEventListener('input', (e) => { botonesPlantilla[Number(e.target.dataset.idx)].telefono = e.target.value; });
-  });
+  enlazar('.boton-texto', 'texto');
+  enlazar('.boton-url', 'url');
+  enlazar('.boton-telefono', 'telefono');
   cont.querySelectorAll('[data-remove]').forEach((btn) => {
     btn.addEventListener('click', () => {
       botonesPlantilla.splice(Number(btn.dataset.remove), 1);
       renderBotonesPlantilla();
+      actualizarFormularioPlantilla();
+    });
+  });
+
+  // Resumen de límites y botón "Agregar" deshabilitado cuando no cabe otro.
+  const c = conteoBotonesPlantilla();
+  $pl('resumenLimitesBotones').textContent =
+    `Llevas ${c.QUICK_REPLY} de 3 respuestas rápidas, ${c.URL} de 2 enlaces y ${c.PHONE_NUMBER} de 1 llamada.`;
+  const hayCupo = botonesPlantilla.length < 10 && Object.keys(LIMITES_BOTONES_PLANTILLA).some((t) => c[t] < LIMITES_BOTONES_PLANTILLA[t]);
+  const btnAgregar = $pl('btnAgregarBotonPlantilla');
+  btnAgregar.disabled = !hayCupo;
+  btnAgregar.title = hayCupo ? '' : 'Ya alcanzaste el máximo de botones permitido por Meta';
+}
+
+$pl('btnAgregarBotonPlantilla').addEventListener('click', () => {
+  const c = conteoBotonesPlantilla();
+  const tipo = Object.keys(LIMITES_BOTONES_PLANTILLA).find((t) => c[t] < LIMITES_BOTONES_PLANTILLA[t]);
+  if (!tipo) return;
+  botonesPlantilla.push({ tipo, texto: '', url: '', telefono: '' });
+  renderBotonesPlantilla();
+  actualizarFormularioPlantilla();
+  $pl('listaBotonesPlantilla').querySelector(`[data-fila-boton="${botonesPlantilla.length - 1}"] .boton-texto`)?.focus();
+});
+
+// ---------- Ejemplos de variables ----------
+
+/** Mantiene una fila de ejemplo por cada variable del cuerpo, sin perder lo ya escrito ni el foco. */
+function sincronizarEjemplosPlantilla(cantidad) {
+  const cont = $pl('ejemplosVariables');
+  const filas = cont.querySelectorAll('[data-fila-ejemplo]').length;
+  $pl('ejemplosVacio').classList.toggle('hidden', cantidad > 0);
+  $pl('ejemplosNota').classList.toggle('hidden', cantidad === 0);
+  if (filas === cantidad) return;
+
+  cont.innerHTML = '';
+  for (let i = 0; i < cantidad; i += 1) {
+    const fila = document.createElement('div');
+    fila.className = 'param-fila';
+    fila.dataset.filaEjemplo = i;
+    fila.innerHTML = `
+      <div class="param-row">
+        <span class="param-index" aria-hidden="true">{{${i + 1}}}</span>
+        <input type="text" data-ejemplo="${i}" maxlength="100" autocomplete="off"
+          placeholder="${escapeHtml(SUGERENCIAS_EJEMPLO[i] || 'Un ejemplo real de este dato')}"
+          aria-label="Ejemplo de la variable {{${i + 1}}}" value="${escapeHtml(ejemplosPlantilla[i] || '')}" />
+      </div>
+      <div class="param-ayuda" data-ayuda-ejemplo="${i}" role="status"></div>`;
+    cont.appendChild(fila);
+  }
+  cont.querySelectorAll('[data-ejemplo]').forEach((inp) => {
+    inp.addEventListener('input', (e) => {
+      ejemplosPlantilla[Number(e.target.dataset.ejemplo)] = e.target.value;
+      actualizarFormularioPlantilla();
+    });
+    inp.addEventListener('blur', (e) => {
+      const i = Number(e.target.dataset.ejemplo);
+      const ayuda = cont.querySelector(`[data-ayuda-ejemplo="${i}"]`);
+      const vacio = !e.target.value.trim();
+      ayuda.textContent = vacio ? `Escribe un ejemplo real para {{${i + 1}}}: Meta lo pide para aprobarla.` : '';
+      ayuda.className = `param-ayuda${vacio ? ' param-ayuda-error' : ''}`;
     });
   });
 }
 
-document.getElementById('btnAgregarBotonPlantilla').addEventListener('click', () => {
-  botonesPlantilla.push({ tipo: 'QUICK_REPLY', texto: '', url: '', telefono: '' });
+// ---------- Actualización en vivo (nombre, contadores, ejemplos, vista previa y revisión) ----------
+
+function pintarContador(el, actual, max, sufijo = '') {
+  el.textContent = `${actual} / ${max}${sufijo}`;
+  el.classList.toggle('error-text', actual > max * 0.9);
+}
+
+function actualizarFormularioPlantilla() {
+  const f = leerFormularioPlantilla();
+  const analisis = analizarCuerpoPlantilla($pl('inputPlantillaBody').value);
+
+  // Nombre: se explica qué cambió en vez de borrar caracteres en silencio.
+  const ayudaNombre = $pl('ayudaPlantillaNombre');
+  const escrito = f.nombreEscrito.trim();
+  if (!escrito) {
+    ayudaNombre.textContent = 'Escríbelo como quieras: lo convertimos al formato que pide Meta (minúsculas, sin tildes ni espacios).';
+    ayudaNombre.className = 'param-ayuda';
+  } else if (!f.nombre) {
+    ayudaNombre.textContent = 'Usa al menos una letra o un número.';
+    ayudaNombre.className = 'param-ayuda param-ayuda-error';
+  } else if (f.nombre !== escrito) {
+    ayudaNombre.textContent = `Se enviará como: ${f.nombre} (en minúsculas, sin tildes, y con guion bajo en lugar de espacios).`;
+    ayudaNombre.className = 'param-ayuda param-ayuda-warn';
+  } else {
+    ayudaNombre.textContent = `Nombre listo: ${f.nombre}`;
+    ayudaNombre.className = 'param-ayuda param-ayuda-ok';
+  }
+
+  // Encabezado, pie y cuerpo.
+  pintarContador($pl('contadorPlantillaHeader'), f.headerTexto.length, 60, ' · sin variables');
+  pintarContador($pl('contadorPlantillaFooter'), f.footer.length, 60, ' · sin variables ni enlaces');
+  pintarContador($pl('contadorPlantillaBody'), $pl('inputPlantillaBody').value.length, MAX_BODY_PLANTILLA);
+
+  const ayudaCuerpo = $pl('ayudaPlantillaBody');
+  if (cuerpoPlantillaTocado && analisis.errores.length > 0) {
+    ayudaCuerpo.textContent = analisis.errores[0];
+    ayudaCuerpo.className = 'param-ayuda param-ayuda-error';
+  } else if (analisis.cantidad > 0 && analisis.errores.length === 0) {
+    ayudaCuerpo.textContent = `Variables detectadas: ${variablesDistintas($pl('inputPlantillaBody').value).map((n) => `{{${n}}}`).join(', ')}. Escribe un ejemplo de cada una en el paso 5.`;
+    ayudaCuerpo.className = 'param-ayuda param-ayuda-ok';
+  } else {
+    ayudaCuerpo.textContent = '';
+    ayudaCuerpo.className = 'param-ayuda';
+  }
+
+  // Muestra del encabezado.
+  const ayudaMuestra = $pl('ayudaPlantillaMuestra');
+  const errMuestra = errorMuestraPlantilla(f);
+  ayudaMuestra.textContent = errMuestra || AYUDA_ENCABEZADO_PLANTILLA[f.headerTipo] || '';
+  ayudaMuestra.className = `param-ayuda${errMuestra ? ' param-ayuda-error' : ''}`;
+
+  sincronizarEjemplosPlantilla(analisis.errores.length === 0 ? analisis.cantidad : Math.max(analisis.cantidad, 0));
+  const f2 = leerFormularioPlantilla(); // ya con la cantidad de ejemplos al día
+
+  $pl('waPreview').innerHTML = htmlVistaPreviaPlantilla({
+    headerTipo: f2.headerTipo,
+    headerTexto: f2.headerTexto,
+    headerUrl: urlMuestraPlantilla,
+    body: $pl('inputPlantillaBody').value.trim(),
+    footer: f2.footer,
+    ejemplos: f2.ejemplos,
+    botones: f2.botones,
+  });
+
+  // Revisión.
+  const items = calcularChecklistPlantilla(f2);
+  const hayError = items.some((i) => i.nivel === 'error');
+  const icono = { ok: ICONO_CHECK_PL, aviso: ICONO_ALERTA_PL, error: ICONO_X_PL };
+  const nombreNivel = { ok: 'Listo', aviso: 'Aviso', error: 'Falta' };
+  $pl('checklistPlantilla').innerHTML = items.map((i) => `
+    <li class="checklist-item checklist-${i.nivel}">
+      <span class="checklist-icono">${icono[i.nivel]}</span>
+      <span class="checklist-texto"><span class="sr-only">${nombreNivel[i.nivel]}: </span>${escapeHtml(i.texto)}</span>
+      ${i.nivel !== 'ok' && i.campo ? `<button type="button" class="checklist-ir" data-campo="${escapeHtml(i.campo)}">Ir</button>` : ''}
+    </li>`).join('');
+  $pl('checklistPlantilla').querySelectorAll('.checklist-ir').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const campo = document.querySelector(btn.dataset.campo);
+      if (campo) {
+        campo.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        campo.focus({ preventScroll: true });
+      }
+    });
+  });
+
+  const btn = $pl('btnEnviarSolicitudPlantilla');
+  btn.disabled = hayError;
+  const primerError = items.find((i) => i.nivel === 'error');
+  $pl('motivoBloqueoPlantilla').textContent = hayError ? `Para enviar: ${primerError.texto.charAt(0).toLowerCase()}${primerError.texto.slice(1).replace(/[.\s]+$/, '')}.` : 'Todo listo. Revisa la vista previa y envía tu solicitud.';
+}
+
+// ---------- Eventos del formulario ----------
+
+$pl('formSolicitudPlantilla').addEventListener('input', actualizarFormularioPlantilla);
+$pl('formSolicitudPlantilla').addEventListener('change', actualizarFormularioPlantilla);
+$pl('inputPlantillaBody').addEventListener('blur', () => { cuerpoPlantillaTocado = true; actualizarFormularioPlantilla(); });
+
+$pl('selectPlantillaHeaderTipo').addEventListener('change', (e) => {
+  const tipo = e.target.value;
+  $pl('campoPlantillaHeaderTexto').classList.toggle('hidden', tipo !== 'TEXT');
+  $pl('campoPlantillaHeaderMuestra').classList.toggle('hidden', !['IMAGE', 'VIDEO', 'DOCUMENT'].includes(tipo));
+  $pl('ayudaPlantillaHeader').textContent = AYUDA_ENCABEZADO_PLANTILLA[tipo];
+});
+
+$pl('inputPlantillaMuestra').addEventListener('change', (e) => {
+  const archivo = e.target.files[0];
+  $pl('inputPlantillaMuestraNombre').textContent = archivo?.name || 'Ningún archivo seleccionado';
+  if (urlMuestraPlantilla) URL.revokeObjectURL(urlMuestraPlantilla);
+  urlMuestraPlantilla = archivo && /^(image|video)\//.test(archivo.type) ? URL.createObjectURL(archivo) : null;
+});
+
+$pl('btnInsertarVariable').addEventListener('click', () => {
+  const ta = $pl('inputPlantillaBody');
+  const siguiente = variablesDistintas(ta.value).length + 1;
+  const texto = `{{${siguiente}}}`;
+  const ini = ta.selectionStart ?? ta.value.length;
+  const fin = ta.selectionEnd ?? ta.value.length;
+  ta.value = `${ta.value.slice(0, ini)}${texto}${ta.value.slice(fin)}`;
+  ta.focus();
+  ta.setSelectionRange(ini + texto.length, ini + texto.length);
+  actualizarFormularioPlantilla();
+});
+
+// ---------- Modelos, duplicar y reinicio ----------
+
+function resetearFormularioPlantilla() {
+  $pl('formSolicitudPlantilla').reset();
+  botonesPlantilla = [];
+  ejemplosPlantilla = [];
+  cuerpoPlantillaTocado = false;
+  if (urlMuestraPlantilla) URL.revokeObjectURL(urlMuestraPlantilla);
+  urlMuestraPlantilla = null;
+  $pl('campoPlantillaHeaderTexto').classList.add('hidden');
+  $pl('campoPlantillaHeaderMuestra').classList.add('hidden');
+  $pl('ayudaPlantillaHeader').textContent = AYUDA_ENCABEZADO_PLANTILLA.NONE;
+  $pl('inputPlantillaMuestraNombre').textContent = 'Ningún archivo seleccionado';
+  $pl('ejemplosVariables').innerHTML = '';
   renderBotonesPlantilla();
-});
+  actualizarFormularioPlantilla();
+}
 
-document.getElementById('selectPlantillaHeaderTipo').addEventListener('change', (e) => {
-  document.getElementById('campoPlantillaHeaderTexto').classList.toggle('hidden', e.target.value !== 'TEXT');
-  document.getElementById('campoPlantillaHeaderMuestra').classList.toggle('hidden', !['IMAGE', 'VIDEO', 'DOCUMENT'].includes(e.target.value));
-});
+/** Rellena el formulario con un modelo o con una solicitud anterior (duplicar). */
+function cargarEnFormularioPlantilla(d) {
+  resetearFormularioPlantilla();
+  const radio = document.querySelector(`input[name="categoriaPlantilla"][value="${d.categoria}"]`);
+  if (radio) radio.checked = true;
+  $pl('inputPlantillaNombre').value = d.nombre || '';
+  const selIdioma = $pl('selectPlantillaIdioma');
+  if (d.idioma && !Array.from(selIdioma.options).some((o) => o.value === d.idioma)) selIdioma.add(new Option(d.idioma, d.idioma));
+  selIdioma.value = d.idioma || 'es';
+  $pl('selectPlantillaHeaderTipo').value = d.header_tipo || 'NONE';
+  $pl('selectPlantillaHeaderTipo').dispatchEvent(new Event('change'));
+  $pl('inputPlantillaHeaderTexto').value = d.header_texto || '';
+  $pl('inputPlantillaBody').value = d.body || '';
+  $pl('inputPlantillaFooter').value = d.footer || '';
+  $pl('inputPlantillaNota').value = d.nota || '';
+  ejemplosPlantilla = [...(d.ejemplos || [])];
+  botonesPlantilla = (d.botones || []).map((b) => ({ tipo: b.tipo, texto: b.texto || '', url: b.url || '', telefono: b.telefono || '' }));
+  cuerpoPlantillaTocado = Boolean(d.body);
+  renderBotonesPlantilla();
+  actualizarFormularioPlantilla();
+}
 
-document.getElementById('inputPlantillaMuestra').addEventListener('change', (e) => {
-  document.getElementById('inputPlantillaMuestraNombre').textContent = e.target.files[0]?.name || 'Ningún archivo seleccionado';
-});
+function mostrarAvisoFormularioPlantilla(texto, nivel = 'ok') {
+  const box = $pl('solicitudPlantillaResultado');
+  box.classList.remove('hidden', 'error', 'ok');
+  box.classList.add(nivel);
+  box.textContent = texto;
+}
 
-document.getElementById('inputPlantillaNombre').addEventListener('input', (e) => {
-  const limpio = e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '');
-  if (limpio !== e.target.value) e.target.value = limpio;
-});
+function pintarModelosPlantilla() {
+  const cont = $pl('modelosPlantilla');
+  cont.innerHTML = `${MODELOS_PLANTILLA.map((m) => `
+    <button type="button" class="modelo-card" data-modelo="${m.id}">
+      <span class="modelo-card-titulo">${escapeHtml(m.titulo)}</span>
+      <span class="modelo-card-desc">${escapeHtml(m.descripcion)}</span>
+      <span class="modelo-card-tipo">${ETIQUETAS_CATEGORIA_PLANTILLA[m.categoria]}</span>
+    </button>`).join('')}
+    <button type="button" class="modelo-card modelo-card-blanco" data-modelo="blanco">
+      <span class="modelo-card-titulo">Empezar en blanco</span>
+      <span class="modelo-card-desc">Escribo todo desde cero</span>
+    </button>`;
+  cont.querySelectorAll('[data-modelo]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.modelo === 'blanco') {
+        resetearFormularioPlantilla();
+        $pl('inputPlantillaNombre').focus();
+        return;
+      }
+      const m = MODELOS_PLANTILLA.find((x) => x.id === btn.dataset.modelo);
+      cargarEnFormularioPlantilla(m);
+      mostrarAvisoFormularioPlantilla(`Cargamos el modelo «${m.titulo}». Cámbialo a tu gusto: los textos de ejemplo (nombres, enlaces) son solo una guía.`);
+      $pl('inputPlantillaNombre').focus();
+    });
+  });
+}
 
-document.getElementById('inputPlantillaBody').addEventListener('input', (e) => {
-  const contador = document.getElementById('contadorPlantillaBody');
-  contador.textContent = `${e.target.value.length} / 1024`;
-  contador.classList.toggle('error-text', e.target.value.length > 900);
-});
+/** Costo por mensaje en cada tarjeta de tipo (según el plan del cliente). */
+function actualizarCostosCategoriasPlantilla() {
+  document.querySelectorAll('[data-costo-categoria]').forEach((el) => {
+    const cat = el.dataset.costoCategoria;
+    let texto = '';
+    if (misCreditos?.costos) {
+      const c = misCreditos.costos[cat];
+      const base = cat === 'AUTHENTICATION' ? c : c?.TEXTO;
+      if (base) texto = `Desde ${formatearMoneda(base)} por mensaje de solo texto (sin IVA)`;
+    } else if (misPlan?.aplica) {
+      texto = 'Cada mensaje se descuenta de tu plan mensual';
+    }
+    el.textContent = texto;
+    el.classList.toggle('hidden', !texto);
+  });
+}
 
-document.getElementById('formSolicitudPlantilla').addEventListener('submit', async (e) => {
+// ---------- Envío ----------
+
+$pl('formSolicitudPlantilla').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const box = document.getElementById('solicitudPlantillaResultado');
+  const box = $pl('solicitudPlantillaResultado');
+  const f = leerFormularioPlantilla();
+  const primerError = calcularChecklistPlantilla(f).find((i) => i.nivel === 'error');
+  if (primerError) {
+    mostrarErrorEnvio(box, primerError.texto, primerError.campo ? document.querySelector(primerError.campo) : null);
+    return;
+  }
+
+  const btn = $pl('btnEnviarSolicitudPlantilla');
+  btn.disabled = true;
+  btn.classList.add('is-loading');
   box.classList.remove('hidden', 'error', 'ok');
   box.textContent = 'Enviando…';
 
   const formData = new FormData();
-  formData.append('nombre', document.getElementById('inputPlantillaNombre').value.trim().toLowerCase());
-  formData.append('categoria', document.getElementById('selectPlantillaCategoria').value);
-  formData.append('idioma', document.getElementById('inputPlantillaIdioma').value.trim() || 'es');
-  formData.append('header_tipo', document.getElementById('selectPlantillaHeaderTipo').value);
-  formData.append('header_texto', document.getElementById('inputPlantillaHeaderTexto').value.trim());
-  formData.append('body_texto', document.getElementById('inputPlantillaBody').value.trim());
-  formData.append('footer_texto', document.getElementById('inputPlantillaFooter').value.trim());
-  formData.append('botones_json', JSON.stringify(botonesPlantilla));
-  const muestra = document.getElementById('inputPlantillaMuestra').files[0];
-  if (muestra) formData.append('muestra_encabezado', muestra);
+  formData.append('nombre', f.nombre);
+  formData.append('categoria', f.categoria);
+  formData.append('idioma', f.idioma);
+  formData.append('header_tipo', f.headerTipo);
+  formData.append('header_texto', f.headerTipo === 'TEXT' ? f.headerTexto : '');
+  formData.append('body_texto', f.body);
+  formData.append('footer_texto', f.footer);
+  formData.append('botones_json', JSON.stringify(f.botones));
+  formData.append('ejemplos_json', JSON.stringify(f.ejemplos));
+  if (f.nota) formData.append('nota_cliente', f.nota);
+  if (f.muestra && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(f.headerTipo)) formData.append('muestra_encabezado', f.muestra);
 
   try {
     const res = await fetch('/api/plantillas', { method: 'POST', body: formData });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'No se pudo enviar la solicitud');
 
-    box.classList.add('ok');
-    box.textContent = 'Solicitud enviada — te avisamos aquí mismo cuando cambie de estado.';
-    e.target.reset();
-    botonesPlantilla = [];
-    renderBotonesPlantilla();
-    document.getElementById('campoPlantillaHeaderTexto').classList.add('hidden');
-    document.getElementById('campoPlantillaHeaderMuestra').classList.add('hidden');
-    document.getElementById('contadorPlantillaBody').textContent = '0 / 1024';
-    document.getElementById('contadorPlantillaBody').classList.remove('error-text');
-    document.getElementById('inputPlantillaMuestraNombre').textContent = 'Ningún archivo seleccionado';
-    cargarMisPlantillas();
+    resetearFormularioPlantilla();
+    mostrarAvisoFormularioPlantilla(`Solicitud «${data.solicitud.nombre}» enviada. Quedó en estado «Pendiente»: la revisamos y la mandamos a Meta. Sigue su avance en «Mis solicitudes»; te marcamos un punto en esta pestaña cuando cambie de estado.`);
+    await cargarMisPlantillas();
+    $pl('cardMisSolicitudes').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (err) {
-    box.classList.add('error');
-    box.textContent = err.message;
+    mostrarErrorEnvio(box, err.message);
+  } finally {
+    btn.classList.remove('is-loading');
+    actualizarFormularioPlantilla();
   }
 });
+
+// ---------- Mis solicitudes ----------
 
 function renderResumenPlantilla(p) {
   const partes = [];
@@ -3734,37 +4261,181 @@ function renderResumenPlantilla(p) {
   if (p.botones?.length) partes.push(`${p.botones.length} botón(es)`);
   let resumen = escapeHtml(partes.join(' — '));
   if (p.header_media_url) {
-    resumen += ` <a href="${escapeHtml(p.header_media_url)}" target="_blank" rel="noopener">📎 ver muestra</a>`;
+    resumen += ` <a href="${escapeHtml(p.header_media_url)}" target="_blank" rel="noopener">ver muestra</a>`;
   }
   return resumen;
+}
+
+const CLAVE_ESTADOS_PLANTILLA = 'dl-plantillas-estados';
+
+function leerEstadosVistosPlantilla() {
+  try { return JSON.parse(lsGet(CLAVE_ESTADOS_PLANTILLA) || 'null'); } catch { return null; }
+}
+
+function marcarEstadosVistosPlantilla(solicitudes) {
+  lsSet(CLAVE_ESTADOS_PLANTILLA, JSON.stringify(Object.fromEntries(solicitudes.map((s) => [s.id, s.estado]))));
+}
+
+/** Punto en la pestaña Plantillas cuando alguna solicitud cambió de estado desde la última vez que la miraste. */
+function actualizarPuntoPlantillas(solicitudes) {
+  const tab = document.querySelector('[data-tab="plantillas"]');
+  if (!tab) return;
+  const vistos = leerEstadosVistosPlantilla();
+  const activa = $pl('tab-plantillas').classList.contains('active');
+  if (activa || vistos === null) {
+    marcarEstadosVistosPlantilla(solicitudes);
+    tab.querySelector('.tab-aviso')?.remove();
+    return;
+  }
+  const cambios = solicitudes.filter((s) => vistos[s.id] !== undefined && vistos[s.id] !== s.estado).length;
+  let punto = tab.querySelector('.tab-aviso');
+  if (cambios > 0 && !punto) {
+    punto = document.createElement('span');
+    punto.className = 'tab-aviso';
+    tab.appendChild(punto);
+  }
+  if (punto) {
+    punto.textContent = cambios > 0 ? String(cambios) : '';
+    punto.setAttribute('aria-label', `${cambios} ${cambios === 1 ? 'solicitud cambió' : 'solicitudes cambiaron'} de estado`);
+    if (cambios === 0) punto.remove();
+  }
+}
+
+function pintarTablaMisPlantillas(solicitudes) {
+  const tbody = $pl('tablaMisPlantillas');
+  $pl('totalMisPlantillas').textContent = solicitudes.length;
+  tbody.innerHTML = solicitudes.map((p) => `
+    <tr class="fila-clicable" data-solicitud="${p.id}">
+      <td>${escapeHtml(p.nombre)}</td>
+      <td>${ETIQUETAS_CATEGORIA_PLANTILLA[p.categoria] || escapeHtml(p.categoria)}</td>
+      <td><span class="estado-pill estado-${p.estado}">${ETIQUETAS_ESTADO_PLANTILLA[p.estado] || p.estado}</span></td>
+      <td class="que-sigue">${escapeHtml(QUE_SIGUE_PLANTILLA[p.estado] || '')}</td>
+      <td>${formatearFechaCorta(p.creado_en)}</td>
+      <td><button type="button" class="btn btn-sm btn-outline" data-ver-solicitud="${p.id}">Ver detalle</button></td>
+    </tr>
+  `).join('') || `<tr><td colspan="6">
+      <div class="empty-state">
+        <div>Todavía no has pedido ninguna plantilla. Elige un modelo arriba o empieza en blanco.</div>
+        <button type="button" class="btn btn-sm btn-primary" data-ir-form-plantilla style="margin-top: 12px;">Crear mi primera plantilla</button>
+      </div>
+    </td></tr>`;
+
+  tbody.querySelectorAll('[data-solicitud]').forEach((tr) => {
+    tr.addEventListener('click', () => abrirDetallePlantilla(Number(tr.dataset.solicitud)));
+  });
 }
 
 async function cargarMisPlantillas() {
   const res = await fetch('/api/plantillas');
   const data = await res.json();
-  const tbody = document.getElementById('tablaMisPlantillas');
-  document.getElementById('totalMisPlantillas').textContent = data.solicitudes.length;
-
-  tbody.innerHTML = data.solicitudes.map((p) => `
-    <tr>
-      <td>${escapeHtml(p.nombre)}</td>
-      <td>${escapeHtml(p.categoria)}</td>
-      <td>${escapeHtml(p.numero_asignado || 'Sin asignar')}</td>
-      <td><span class="estado-pill estado-${p.estado}">${ETIQUETAS_ESTADO_PLANTILLA[p.estado] || p.estado}</span></td>
-      <td>${new Date(p.creado_en).toLocaleDateString('es-CO')}</td>
-    </tr>
-  `).join('') || `<tr><td colspan="5">
-      <div class="empty-state">
-        <div>Todavía no has pedido ninguna plantilla. Completa el formulario de arriba para pedir la primera.</div>
-        <button type="button" class="btn btn-sm btn-outline" data-ir-form-plantilla style="margin-top: 12px;">Pedir mi primera plantilla</button>
-      </div>
-    </td></tr>`;
+  solicitudesPlantillaCache = data.solicitudes;
+  pintarTablaMisPlantillas(data.solicitudes);
+  actualizarCostosCategoriasPlantilla();
+  actualizarPuntoPlantillas(data.solicitudes);
 
   if (guia.activa) {
     guia.plantillas = data.solicitudes;
     actualizarDatalistPlantillas(guia.plantillas);
     actualizarGuia();
   }
+}
+
+// ---------- Detalle, duplicar y cancelar ----------
+
+function siguienteNombreVersion(nombre) {
+  const m = /^(.*)_v(\d+)$/.exec(nombre);
+  return m ? `${m[1]}_v${Number(m[2]) + 1}` : `${nombre}_v2`;
+}
+
+function abrirDetallePlantilla(id) {
+  const p = solicitudesPlantillaCache.find((s) => s.id === id);
+  if (!p) return;
+  const modal = $pl('modalDetallePlantilla');
+  const previoFoco = document.activeElement;
+
+  const filas = [];
+  filas.push(`<div class="resumen-fila"><dt>Estado</dt><dd><span class="estado-pill estado-${p.estado}">${ETIQUETAS_ESTADO_PLANTILLA[p.estado] || p.estado}</span> <span class="muted">${escapeHtml(QUE_SIGUE_PLANTILLA[p.estado] || '')}</span></dd></div>`);
+  if (p.estado === 'rechazada') {
+    filas.push(`<div class="resumen-fila resumen-aviso"><dt>Por qué la rechazaron</dt><dd>${p.nota_admin ? escapeHtml(p.nota_admin) : 'Todavía no tenemos el motivo detallado. Escríbenos y te lo explicamos.'}<br /><span class="muted">Corrige lo indicado con «Duplicar y corregir» y envíala de nuevo.</span></dd></div>`);
+  } else if (p.nota_admin) {
+    filas.push(`<div class="resumen-fila"><dt>Nota de nuestro equipo</dt><dd>${escapeHtml(p.nota_admin)}</dd></div>`);
+  }
+  filas.push(`<div class="resumen-fila"><dt>Nombre · tipo · idioma</dt><dd>${escapeHtml(p.nombre)} · ${ETIQUETAS_CATEGORIA_PLANTILLA[p.categoria] || escapeHtml(p.categoria)} · ${escapeHtml(p.idioma)}</dd></div>`);
+  filas.push(`<div class="resumen-fila"><dt>Número asignado</dt><dd>${escapeHtml(p.numero_asignado || 'Sin asignar todavía')}</dd></div>`);
+  filas.push(`<div class="resumen-fila"><dt>Así se ve</dt><dd>${htmlVistaPreviaPlantilla({
+    headerTipo: p.header_tipo, headerTexto: p.header_texto, headerUrl: p.header_media_url,
+    body: p.body_texto, footer: p.footer_texto, ejemplos: p.ejemplos || [], botones: p.botones,
+  })}</dd></div>`);
+  if ((p.ejemplos || []).length > 0) {
+    filas.push(`<div class="resumen-fila"><dt>Ejemplos que enviaste a Meta</dt><dd><ul class="resumen-lista">${p.ejemplos.map((e, i) => `<li>{{${i + 1}}} → ${escapeHtml(e)}</li>`).join('')}</ul></dd></div>`);
+  }
+  if (p.nota_cliente) filas.push(`<div class="resumen-fila"><dt>Tu nota</dt><dd>${escapeHtml(p.nota_cliente)}</dd></div>`);
+
+  $pl('modalDetallePlantillaTitulo').textContent = `Solicitud «${p.nombre}»`;
+  $pl('modalDetallePlantillaCuerpo').innerHTML = `<dl>${filas.join('')}</dl>`;
+  $pl('modalDetallePlantillaCancelarSolicitud').classList.toggle('hidden', p.estado !== 'pendiente');
+  modal.classList.remove('hidden');
+  $pl('modalDetallePlantillaCerrar').focus();
+
+  const cerrar = () => {
+    modal.classList.add('hidden');
+    document.removeEventListener('keydown', alTeclear);
+    modal.removeEventListener('click', alClicFuera);
+    if (previoFoco && previoFoco.focus) previoFoco.focus();
+  };
+  const alTeclear = (ev) => { if (ev.key === 'Escape') cerrar(); };
+  const alClicFuera = (ev) => { if (ev.target === modal) cerrar(); };
+  document.addEventListener('keydown', alTeclear);
+  modal.addEventListener('click', alClicFuera);
+
+  $pl('modalDetallePlantillaCerrar').onclick = cerrar;
+  $pl('modalDetallePlantillaDuplicar').onclick = () => {
+    cerrar();
+    cargarEnFormularioPlantilla({
+      categoria: p.categoria, nombre: siguienteNombreVersion(p.nombre), idioma: p.idioma,
+      header_tipo: p.header_tipo, header_texto: p.header_texto, body: p.body_texto, footer: p.footer_texto,
+      ejemplos: p.ejemplos, botones: p.botones, nota: p.nota_cliente,
+    });
+    const necesitaMuestra = ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(p.header_tipo);
+    mostrarAvisoFormularioPlantilla(`Cargamos una copia de «${p.nombre}» para que la corrijas. La original no cambia.${necesitaMuestra ? ' Vuelve a subir el archivo de muestra del encabezado.' : ''}`);
+    $pl('formSolicitudPlantilla').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    $pl('inputPlantillaBody').focus({ preventScroll: true });
+  };
+  $pl('modalDetallePlantillaCancelarSolicitud').onclick = async () => {
+    cerrar();
+    const confirmado = await confirmarEnModal({
+      titulo: '¿Cancelar esta solicitud?',
+      cuerpoHtml: `<p>Vas a cancelar «${escapeHtml(p.nombre)}». No se enviará a Meta. Si cambias de idea, tendrás que pedirla de nuevo.</p>`,
+      textoConfirmar: 'Sí, cancelar solicitud',
+      textoVolver: 'No, mantenerla',
+    });
+    if (!confirmado) return;
+    const res = await fetch(`/api/plantillas/${p.id}/cancelar`, { method: 'PATCH' });
+    const data = await res.json().catch(() => ({}));
+    mostrarAvisoFormularioPlantilla(res.ok ? `Cancelaste la solicitud «${p.nombre}».` : (data.error || 'No se pudo cancelar la solicitud'), res.ok ? 'ok' : 'error');
+    cargarMisPlantillas();
+  };
+}
+
+// Refresco suave: cada minuto, mientras la ventana se ve, revisa si alguna solicitud cambió de estado.
+async function revisarCambiosPlantillas() {
+  if (document.visibilityState !== 'visible' || esClienteAdmin) return;
+  try {
+    const res = await fetch('/api/plantillas');
+    if (!res.ok) return;
+    const data = await res.json();
+    solicitudesPlantillaCache = data.solicitudes;
+    if ($pl('tab-plantillas').classList.contains('active')) pintarTablaMisPlantillas(data.solicitudes);
+    actualizarPuntoPlantillas(data.solicitudes);
+  } catch { /* sin red: se reintenta en el próximo ciclo */ }
+}
+setTimeout(revisarCambiosPlantillas, 4000);
+setInterval(revisarCambiosPlantillas, 60000);
+
+function iniciarFormularioPlantilla() {
+  pintarModelosPlantilla();
+  renderBotonesPlantilla();
+  actualizarFormularioPlantilla();
 }
 
 /** Números ya conectados por el admin — misma fuente que la pestaña Webhook. */
@@ -3858,7 +4529,7 @@ document.getElementById('btnCerrarDetalleSolicitud').addEventListener('click', (
   document.getElementById('detalleSolicitudAdmin').classList.add('hidden');
 });
 
-renderBotonesPlantilla();
+iniciarFormularioPlantilla();
 
 // ==================== GUÍA DE PRIMEROS PASOS (empresas independientes) ====================
 // Checklist global arriba del panel + "¿Cómo funciona?" plegable por pestaña.
