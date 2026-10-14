@@ -1,5 +1,6 @@
 import { db } from './db.js';
 import { sendTemplate } from './whatsapp.js';
+import { normalizeHeader } from './csv.js';
 import { costoPorMensaje, registrarMovimientoCreditos } from './creditos.js';
 import { clienteTienePlanActivo, pesoMensaje, cuotaRestante, registrarConsumoPlan } from './planes.js';
 
@@ -12,15 +13,25 @@ import { clienteTienePlanActivo, pesoMensaje, cuotaRestante, registrarConsumoPla
  *
  * Tipos soportados en `parametrosDef`:
  *  - { tipo: 'fijo', valor }     -> el mismo valor para todos
- *  - { tipo: 'nombre' }          -> nombre del contacto (o el teléfono si no tiene)
+ *  - { tipo: 'nombre' }          -> nombre del contacto
  *  - { tipo: 'variable', clave } -> contacto.variables_json[clave]
  *    (datos libres por contacto cargados vía CSV, ej: fecha_cita, hora, servicio)
+ *
+ * El valor viaja literal a WhatsApp: nunca se inventa uno. Si un contacto no
+ * tiene el dato (sin nombre, o sin esa columna), el parámetro queda en
+ * `faltantes` y el contacto se omite en vez de mandar vacío o su teléfono.
+ *
+ * @returns {{ valores: string[], faltantes: string[] }}
  */
 export function resolverParametros(parametrosDef, contacto) {
   let variables = null;
-  return parametrosDef.map((p) => {
-    if (p.tipo === 'nombre') return contacto.nombre || contacto.telefono;
-    if (p.tipo === 'variable') {
+  const faltantes = [];
+  const valores = parametrosDef.map((p, idx) => {
+    let valor = '';
+    if (p.tipo === 'nombre') {
+      valor = String(contacto.nombre || '').trim();
+      if (!valor) faltantes.push(`{{${idx + 1}}} (nombre del contacto)`);
+    } else if (p.tipo === 'variable') {
       if (!variables) {
         try {
           variables = JSON.parse(contacto.variables_json || '{}');
@@ -28,10 +39,51 @@ export function resolverParametros(parametrosDef, contacto) {
           variables = {};
         }
       }
-      return variables[p.clave] || '';
+      valor = String(variables[normalizeHeader(p.clave)] ?? '').trim();
+      if (!valor) faltantes.push(`{{${idx + 1}}} (columna «${p.clave}»)`);
+    } else {
+      valor = String(p.valor || '').trim();
     }
-    return p.valor || '';
+    return valor;
   });
+  return { valores, faltantes };
+}
+
+/**
+ * Valida la definición de parámetros que llega del frontend. Devuelve el
+ * mensaje de error (para un 400) o null si está bien.
+ */
+export function validarParametrosDef(parametros) {
+  if (!Array.isArray(parametros)) return 'Los parámetros tienen un formato inválido';
+  for (let i = 0; i < parametros.length; i += 1) {
+    const p = parametros[i];
+    const n = i + 1;
+    if (!p || !['nombre', 'variable', 'fijo'].includes(p.tipo)) {
+      return `El parámetro {{${n}}} no tiene un tipo válido. Elige nombre, columna o texto fijo.`;
+    }
+    if (p.tipo === 'fijo' && !String(p.valor || '').trim()) {
+      return `Escribe el texto fijo del parámetro {{${n}}}.`;
+    }
+    if (p.tipo === 'variable' && !String(p.clave || '').trim()) {
+      return `Indica la columna del archivo para el parámetro {{${n}}}.`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Separa los contactos que se pueden enviar de los que se omiten porque les
+ * falta el dato de algún parámetro.
+ */
+export function particionarPorParametros(parametrosDef, contactos) {
+  const enviables = [];
+  const omitidos = [];
+  for (const contacto of contactos) {
+    const { faltantes } = resolverParametros(parametrosDef, contacto);
+    if (faltantes.length > 0) omitidos.push({ contacto, telefono: contacto.telefono, faltantes });
+    else enviables.push(contacto);
+  }
+  return { enviables, omitidos };
 }
 
 /**
@@ -110,7 +162,7 @@ export async function procesarCampana({
   parametrosDef,
   imagenMediaId,
   encabezadoTipo,
-  contactos,
+  contactos: todosLosContactos,
   phoneNumberId,
   accessToken,
   flowBoton = false,
@@ -118,6 +170,10 @@ export async function procesarCampana({
   clienteId = null,
   categoriaPlantilla = null,
 }) {
+  // Contactos a los que les falta el dato de algún parámetro no se envían
+  // (ni se cobran): quedan en el historial como fallidos con el motivo, para
+  // que el usuario vea exactamente quién se quedó afuera y por qué.
+  const { enviables: contactos, omitidos } = particionarPorParametros(parametrosDef, todosLosContactos);
   // Chequeo defensivo de créditos justo antes de mandar — cubre el caso de
   // una campaña programada, donde pasó tiempo desde que se creó (y se validó
   // el saldo) hasta que el scheduler la dispara de verdad. Si ya no alcanza,
@@ -169,8 +225,20 @@ export async function procesarCampana({
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
 
+  for (const { contacto, faltantes } of omitidos) {
+    insertEnvio.run(
+      campanaId,
+      contacto.id,
+      contacto.telefono,
+      contacto.nombre || null,
+      'fallido',
+      `Omitido: no se envió porque este contacto no tiene el dato para el parámetro ${faltantes.join(', ')}`,
+      null
+    );
+  }
+
   for (const contacto of contactos) {
-    const parametrosResueltos = resolverParametros(parametrosDef, contacto);
+    const parametrosResueltos = resolverParametros(parametrosDef, contacto).valores;
 
     const resultado = await sendTemplate({
       to: contacto.telefono,

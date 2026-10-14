@@ -14,7 +14,7 @@ import { parsearFechaEnvio, analizarFechaEnvio, esColumnaFechaEnvio } from './fe
 import { parseExcel } from './excel.js';
 import { sendTextMessage, subirMedia, normalizePhone, isWhatsAppConfigured } from './whatsapp.js';
 import { normalizarVideoWhatsApp, MAX_VIDEO_BYTES } from './video.js';
-import { procesarCampana } from './campanas.js';
+import { procesarCampana, validarParametrosDef, particionarPorParametros } from './campanas.js';
 import { iniciarScheduler } from './scheduler.js';
 import {
   CATEGORIAS_CREDITO,
@@ -573,14 +573,18 @@ app.patch('/api/contactos/:id', (req, res) => {
   const contacto = db.prepare('SELECT * FROM contactos WHERE id = ? AND cliente_id = ?').get(req.params.id, cliente.id);
   if (!contacto) return res.status(404).json({ error: 'Contacto no encontrado' });
 
-  const { nombre, fecha_recordatorio } = req.body || {};
+  // Un campo que no viene en el body se conserva; uno que viene vacío se borra.
+  const body = req.body || {};
+  const { nombre, fecha_recordatorio } = body;
   const fechaNormalizada = fecha_recordatorio ? normalizarFechaProgramada(fecha_recordatorio) : null;
   if (fecha_recordatorio && !fechaNormalizada) {
-    return res.status(400).json({ error: 'Fecha de envío inválida' });
+    return res.status(400).json({ error: 'La fecha de envío no es válida. Usa el formato día/mes/año con hora.' });
   }
 
+  const nombreFinal = 'nombre' in body ? nombre || null : contacto.nombre;
+  const fechaFinal = 'fecha_recordatorio' in body ? fechaNormalizada : contacto.fecha_recordatorio;
   db.prepare('UPDATE contactos SET nombre = ?, fecha_recordatorio = ? WHERE id = ?')
-    .run(nombre || null, fechaNormalizada, contacto.id);
+    .run(nombreFinal, fechaFinal, contacto.id);
 
   res.json({ contacto: db.prepare('SELECT * FROM contactos WHERE id = ?').get(contacto.id) });
 });
@@ -840,6 +844,19 @@ function normalizarFechaProgramada(valor) {
   return parsearFechaEnvio(valor);
 }
 
+/**
+ * Fecha de envío ya guardada en un contacto. Se guarda en UTC
+ * ('YYYY-MM-DD HH:MM:SS'), así que NO se vuelve a pasar por
+ * `normalizarFechaProgramada`: sin zona explícita la leería como hora de
+ * Colombia y le sumaría 5 horas otra vez (un recordatorio de las 8 p. m. del
+ * 13 terminaba el 14).
+ */
+function fechaGuardadaDeContacto(contacto) {
+  const valor = String(contacto.fecha_recordatorio || '').trim();
+  if (!valor) return null;
+  return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(valor) ? valor : normalizarFechaProgramada(valor);
+}
+
 function esFechaFutura(fechaSql) {
   return Boolean(fechaSql) && fechaSql > new Date().toISOString().slice(0, 19).replace('T', ' ');
 }
@@ -916,6 +933,27 @@ app.post('/api/campanas', (req, res) => {
       return res.status(400).json({ error: 'No se encontraron los contactos seleccionados' });
     }
 
+    const parametrosDef = Array.isArray(parametros) ? parametros : [];
+    const errorParametros = validarParametrosDef(parametros);
+    if (errorParametros) return res.status(400).json({ error: errorParametros });
+
+    // Contactos que de verdad se van a enviar: los que tienen el dato de
+    // cada parámetro y, en modo individual, además una fecha propia válida.
+    // Solo ellos cuentan para el saldo/cuota — los omitidos no se cobran.
+    const { enviables: conParametros, omitidos: omitidosPorParametros } = particionarPorParametros(parametrosDef, contactos);
+    const esIndividual = individual === 'true' || individual === true;
+    const sinFechaPropia = esIndividual ? conParametros.filter((c) => !fechaGuardadaDeContacto(c)) : [];
+    const contactosAEnviar = esIndividual ? conParametros.filter((c) => fechaGuardadaDeContacto(c)) : conParametros;
+    if (contactosAEnviar.length === 0) {
+      const motivos = [];
+      if (sinFechaPropia.length > 0) motivos.push(`${sinFechaPropia.length} sin fecha de envío propia`);
+      if (omitidosPorParametros.length > 0) motivos.push(`${omitidosPorParametros.length} sin el dato de algún parámetro`);
+      return res.status(400).json({
+        error: `Ninguno de los contactos seleccionados se puede enviar (${motivos.join(', ') || 'sin datos'}). Revisa las fechas y los parámetros.`,
+        omitidos_parametros: omitidosPorParametros.map((o) => ({ telefono: o.telefono, faltantes: o.faltantes })),
+      });
+    }
+
     // El costo en créditos varía según el tipo de contenido del encabezado
     // (texto/imagen/video), así que hace falta saberlo ANTES del chequeo de
     // saldo — tipoEncabezado() es puro sobre el nombre de archivo, no hace
@@ -937,7 +975,7 @@ app.post('/api/campanas', (req, res) => {
         // haber evitado llegar acá (ver btnEnviarCampana en app.js), pero
         // el backend es la fuente de verdad.
         const peso = pesoMensaje(categoriaPlantilla);
-        const necesarios = peso * contactos.length;
+        const necesarios = peso * contactosAEnviar.length;
         const { mediosLibres } = cuotaRestante(cliente.id);
         if (necesarios > mediosLibres) {
           return res.status(409).json({
@@ -947,7 +985,7 @@ app.post('/api/campanas', (req, res) => {
         }
       } else {
         // Camino créditos sueltos (recarga suelta, precios reales COP).
-        const costoTotal = costoPorMensaje(categoriaPlantilla, encabezadoTipo) * contactos.length;
+        const costoTotal = costoPorMensaje(categoriaPlantilla, encabezadoTipo) * contactosAEnviar.length;
         if (cliente.creditos < costoTotal) {
           return res.status(402).json({ error: `No te alcanzan los créditos: esta campaña necesita ${costoTotal} y tienes ${cliente.creditos}.` });
         }
@@ -983,22 +1021,18 @@ app.post('/api/campanas', (req, res) => {
       imagenMediaId = subida.mediaId;
     }
 
-    const parametrosDef = Array.isArray(parametros) ? parametros : [];
     const templateNombreLimpio = template_nombre.trim();
     const idiomaLimpio = idioma || 'es';
 
     // ---- Modo "fecha individual": una campaña por contacto, cada una
     // con SU propio `fecha_recordatorio` (ej: recordatorio de cada
     // paciente el día antes de SU cita particular). ----
-    if (individual === 'true' || individual === true) {
+    if (esIndividual) {
       const creadas = [];
-      const omitidos = [];
-      for (const contacto of contactos) {
-        const fechaProgramada = normalizarFechaProgramada(contacto.fecha_recordatorio);
-        if (!fechaProgramada) {
-          omitidos.push(contacto.telefono);
-          continue;
-        }
+      const omitidos = sinFechaPropia.map((c) => c.telefono);
+      // Solo los que tienen dato en todos los parámetros y fecha propia.
+      for (const contacto of contactosAEnviar) {
+        const fechaProgramada = fechaGuardadaDeContacto(contacto);
         const futura = esFechaFutura(fechaProgramada);
         const result = db
           .prepare(
@@ -1039,7 +1073,13 @@ app.post('/api/campanas', (req, res) => {
           });
         }
       }
-      return res.status(202).json({ campana_ids: creadas, creadas: creadas.length, omitidos, total: contactos.length });
+      return res.status(202).json({
+        campana_ids: creadas,
+        creadas: creadas.length,
+        omitidos,
+        omitidos_parametros: omitidosPorParametros.map((o) => ({ telefono: o.telefono, faltantes: o.faltantes })),
+        total: contactos.length,
+      });
     }
 
     // ---- Modo normal: una sola campaña para todos los contactos

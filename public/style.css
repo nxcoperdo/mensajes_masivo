@@ -1863,3 +1863,102 @@ tfoot#pieEstadisticas td {
   .encuesta-barra { grid-template-columns: 1fr auto; }
   .encuesta-barra-track { grid-column: 1 / -1; }
 }
+
+/* ==================== UX EXPLÍCITA: PARÁMETROS, FECHAS Y REVISIÓN ==================== */
+
+.param-fila { margin-bottom: var(--space-3); }
+.param-fila .param-row { margin-bottom: 4px; }
+.param-ayuda {
+  margin: 0 0 0 42px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  min-height: 0;
+}
+.param-ayuda:empty { display: none; }
+.param-ayuda-ok { color: var(--color-success); }
+.param-ayuda-warn { color: var(--color-warning); }
+.param-ayuda-error { color: var(--color-danger); }
+
+.param-preview {
+  margin-top: var(--space-3);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+}
+.param-preview-resultado { border-left: 3px solid var(--color-primary); }
+.param-preview-titulo { font-size: 12px; font-weight: 600; color: var(--color-text-muted); margin-bottom: 6px; }
+.param-preview-texto { font-size: 14px; line-height: 1.6; color: var(--color-text); white-space: pre-wrap; word-break: break-word; }
+.param-hueco,
+.param-valor-previo {
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  font-style: normal;
+}
+.param-hueco { background: var(--color-info-bg); color: var(--color-info); font-family: var(--font-mono); font-size: 12.5px; }
+.param-valor-previo { background: var(--color-success-bg); color: var(--color-text); font-weight: 600; }
+.param-hueco-falta { background: var(--color-danger-bg); color: var(--color-danger); font-weight: 600; }
+
+.param-aviso {
+  margin-top: var(--space-3);
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.param-aviso-warn { background: var(--color-warning-bg); color: var(--color-warning); border: 1px solid var(--color-warning); }
+
+#resumenFechasIndividual,
+#resumenFechasIndividualEmpresa { font-size: 12.5px; color: var(--color-text-muted); line-height: 1.6; }
+
+/* Estado de la fecha de envío de cada contacto (icono + texto, no solo color). */
+.fecha-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.fecha-badge svg { width: 13px; height: 13px; flex-shrink: 0; }
+.fecha-badge-ok { background: var(--color-success-bg); color: var(--color-success); }
+.fecha-badge-vencida { background: var(--color-danger-bg); color: var(--color-danger); }
+.fecha-badge-sin { background: var(--color-warning-bg); color: var(--color-warning); }
+
+.fechas-resumen { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: var(--space-3) 0 var(--space-2); }
+.chips-filtro { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: var(--space-3); }
+.chip-filtro {
+  min-height: 36px;
+  padding: 6px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+.chip-filtro:hover { border-color: var(--color-primary); color: var(--color-text); }
+.chip-filtro.activo { border-color: var(--color-primary); background: var(--color-success-bg); color: var(--color-text); font-weight: 600; }
+.chip-filtro:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 2px; }
+
+/* Modal "Revisa antes de enviar" */
+.modal-resumen { max-width: 560px; width: calc(100% - 32px); max-height: calc(100dvh - 48px); overflow-y: auto; }
+.resumen-envio dl { margin: 0; }
+.resumen-fila { padding: 10px 0; border-bottom: 1px solid var(--color-border); }
+.resumen-fila:last-child { border-bottom: none; }
+.resumen-fila dt { font-size: 12px; font-weight: 600; color: var(--color-text-muted); margin-bottom: 3px; }
+.resumen-fila dd { margin: 0; font-size: 14px; line-height: 1.55; color: var(--color-text); word-break: break-word; }
+.resumen-lista { margin: 0; padding-left: 18px; }
+.resumen-aviso dt { color: var(--color-warning); }
+
+@media (prefers-reduced-motion: reduce) {
+  .chip-filtro { transition: none; }
+}
+@media (max-width: 560px) {
+  .param-ayuda { margin-left: 0; }
+}

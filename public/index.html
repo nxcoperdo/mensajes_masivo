@@ -393,7 +393,11 @@
           </div>
 
           <h3>Parámetros de la plantilla ({{1}}, {{2}}, …)</h3>
-          <p class="muted">"Variable del contacto" toma un dato cargado por CSV (ej: <code>fecha_cita</code>).</p>
+          <div class="info-note">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>
+            <p>WhatsApp recibe <strong>exactamente</strong> lo que escribas aquí o lo que haya en la columna del archivo, sin cambios. Si un contacto no tiene ese dato, <strong>se omite</strong>: no se envía vacío ni con su teléfono.</p>
+          </div>
+          <datalist id="columnasContactosEmpresaLista"></datalist>
           <div id="parametrosListaEmpresa"></div>
           <button id="btnAgregarParametroEmpresa" type="button" class="btn btn-sm btn-outline">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
@@ -406,6 +410,7 @@
             <input type="checkbox" id="checkFechaIndividualEmpresa" />
             Fecha individual por contacto (usa el <code>fecha_envio</code> propio de cada contacto)
           </label>
+          <div id="resumenFechasIndividualEmpresa" class="info-note hidden" role="status" aria-live="polite"></div>
           <div id="campoFechaComunEmpresa">
             <label for="inputFechaProgramadaEmpresa">Programar para (fecha común para todos)</label>
             <input type="datetime-local" id="inputFechaProgramadaEmpresa" style="max-width: 260px" />
@@ -435,14 +440,17 @@
           <li><span class="section-header-badge">2</span><div><strong>Impórtalo.</strong> Sube el CSV o Excel aquí abajo; el teléfono se arregla solo (agrega el 57 si falta).</div></li>
           <li><span class="section-header-badge">3</span><div><strong>Elige a quién mandarle.</strong> Marca los contactos (o "Seleccionar todos" / por lotes) y pasa a <em>Nueva campaña</em>.</div></li>
         </ol>
-        <p class="guia-seccion-tip">Tip: cualquier columna extra (ej. <code>fecha_cita</code>) la puedes usar después como variable dentro del mensaje.</p>
+        <p class="guia-seccion-tip">Tip: cualquier columna extra (ej. <code>fecha_cita</code>) la puedes usar después como dato dentro del mensaje. Con una columna <code>fecha_envio</code> cada contacto puede recibir su mensaje en su propia fecha.</p>
       </details>
 
       <div class="card">
         <h2>Importar contactos (CSV o Excel)</h2>
         <p class="muted">Columnas esperadas: <code>telefono</code> y <code>nombre</code> (puedes usar <code>phone</code>/<code>numero</code>/<code>name</code> también). El teléfono se normaliza solo (agrega el 57 de Colombia si falta). Formatos aceptados: <code>.csv</code>, <code>.xlsx</code>, <code>.xls</code>.</p>
         <p class="muted">Cualquier otra columna (ej: <code>fecha_cita</code>, <code>hora</code>, <code>servicio</code>) queda disponible como variable de plantilla al armar la campaña.</p>
-        <p class="muted"><strong>Fecha de envío por contacto:</strong> agrega una columna <code>fecha_envio</code> con el día y la hora a la que quieres mandarle el mensaje a ESE contacto (ej: <code>25/10/2026 9:00</code> o <code>25/10/2026 3:30 p. m.</code>; en Excel puedes usar una fecha normal). Va en hora de Colombia y en orden día/mes/año; si solo pones el día, se envía a las 9:00 a. m. Después, en "Nueva campaña", activa "Fecha individual por contacto" y listo — sin tener que ponerlas una por una. Al importar te mostramos cuántas quedaron programadas y cuáles revisar.</p>
+        <div class="info-note">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>
+          <p><strong>¿Quieres un envío en fecha distinta por contacto?</strong> Agrega la columna <code>fecha_envio</code> con día/mes/año y hora, en hora de Colombia (ej: <code>25/10/2026 9:00</code>). Sin hora se envía a las 9:00 a. m. Al importar, abajo verás cuántos contactos quedaron con fecha y cuáles revisar.</p>
+        </div>
         <form id="formImportar">
           <div class="file-picker">
             <label for="inputArchivo" class="file-picker-label">Seleccionar archivo</label>
@@ -493,8 +501,8 @@
             <input type="text" name="nombre" id="inputNombreManual" placeholder="Nombre (opcional)" autocomplete="off" />
           </div>
           <div class="field">
-            <label for="inputFechaRecordatorioManual" class="sr-only">Fecha de envío individual</label>
-            <input type="datetime-local" name="fecha_recordatorio" id="inputFechaRecordatorioManual" title="Fecha de envío individual (opcional)" />
+            <label for="inputFechaRecordatorioManual">Fecha de envío individual <span class="muted" style="font-weight: 400;">(opcional · hora de Colombia)</span></label>
+            <input type="datetime-local" name="fecha_recordatorio" id="inputFechaRecordatorioManual" />
           </div>
           <button type="submit" class="btn btn-outline">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
@@ -524,7 +532,12 @@
           Mandar en lotes de a poco (ej: 100 a la vez) evita que una campaña larga quede a mitad de camino
           si el servidor se reinicia, y ayuda a no pasarte del límite diario de conversaciones que te da Meta.
         </p>
-        <p class="muted" style="margin-top: 4px;">"Fecha de envío" es la fecha individual de ESE contacto (para el modo "Fecha individual por contacto" de la campaña) — un contacto sin fecha propia igual puede recibir un envío masivo con fecha común.</p>
+        <div class="info-note">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>
+          <p><strong>Fecha de envío</strong> es la fecha propia de cada contacto. Solo se usa si en "Nueva campaña" activas "Fecha individual por contacto": ahí los contactos <em>sin fecha</em> se omiten. Con una fecha común (o envío inmediato) esta columna no importa.</p>
+        </div>
+        <div id="resumenFechasContactos" class="fechas-resumen hidden" role="status" aria-live="polite"></div>
+        <div id="chipsFiltroFecha" class="chips-filtro hidden" role="group" aria-label="Filtrar contactos por estado de fecha de envío"></div>
         <div class="table-wrap">
           <table class="tabla">
             <thead>
@@ -532,7 +545,7 @@
                 <th></th>
                 <th>Teléfono</th>
                 <th>Nombre</th>
-                <th>Fecha de envío</th>
+                <th>Fecha de envío <span class="muted" style="font-weight: 400;">(hora de Colombia)</span></th>
                 <th></th>
               </tr>
             </thead>
@@ -608,20 +621,32 @@
           <span class="section-header-badge">2</span>
           <div>
             <h3>Parámetros de la plantilla ({{1}}, {{2}}, …)</h3>
-            <p>Agrega uno por cada <code>{{N}}</code> que tenga tu plantilla, en orden.</p>
+            <p>Indica qué texto reemplaza cada <code>{{N}}</code> de tu plantilla, en orden.</p>
           </div>
         </div>
 
         <div class="info-note">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>
-          <p><strong>"Nombre del contacto"</strong> personaliza automáticamente por persona. <strong>"Variable del contacto"</strong> toma un dato cargado por CSV (ej: <code>fecha_cita</code>).</p>
+          <p>WhatsApp recibe <strong>exactamente</strong> lo que escribas aquí o lo que haya en la columna del archivo, sin cambios (no se corrigen fechas, mayúsculas ni espacios). Si un contacto no tiene ese dato, <strong>se omite a ese contacto</strong>: no se envía vacío ni se reemplaza por su teléfono.</p>
         </div>
 
+        <div id="plantillaCuerpoBloque" class="param-preview hidden">
+          <div class="param-preview-titulo">Texto de tu plantilla</div>
+          <div id="plantillaCuerpoTexto" class="param-preview-texto"></div>
+        </div>
+        <div id="parametrosAviso" class="param-aviso hidden" role="status" aria-live="polite"></div>
+
         <div id="parametrosLista" style="margin-top: 14px;"></div>
+        <datalist id="columnasContactosLista"></datalist>
         <button id="btnAgregarParametro" type="button" class="btn-dashed">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
           Agregar parámetro
         </button>
+
+        <div id="parametrosVistaPrevia" class="param-preview param-preview-resultado hidden">
+          <div class="param-preview-titulo">Así llegará el mensaje <span id="parametrosVistaPreviaQuien" class="muted"></span></div>
+          <div id="parametrosVistaPreviaTexto" class="param-preview-texto"></div>
+        </div>
       </div>
 
       <div id="bloqueCreditosCampana" class="card hidden">
@@ -660,6 +685,7 @@
           <input type="checkbox" id="checkFechaIndividual" />
           Fecha individual por contacto (usa el <code>fecha_envio</code> propio de cada contacto, cargado por CSV)
         </label>
+        <div id="resumenFechasIndividual" class="info-note hidden" role="status" aria-live="polite"></div>
         <div id="campoFechaComun">
           <label for="inputFechaProgramada">Programar para (fecha común para todos)</label>
           <input type="datetime-local" id="inputFechaProgramada" style="max-width: 260px" />
@@ -1298,6 +1324,17 @@
         <a id="modalCuotaPlanRecargar" href="#" target="_blank" rel="noopener" class="btn btn-outline">Recargar</a>
         <button type="button" id="modalCuotaPlanEnviar" class="btn btn-primary">Enviar mensajes</button>
         <button type="button" id="modalCuotaPlanCancelar" class="btn btn-sm btn-outline">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modalResumenEnvio" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modalResumenEnvioTitulo">
+    <div class="modal-card card modal-resumen">
+      <h3 id="modalResumenEnvioTitulo">Revisa antes de enviar</h3>
+      <div id="modalResumenEnvioCuerpo" class="resumen-envio"></div>
+      <div class="modal-acciones">
+        <button type="button" id="modalResumenEnvioVolver" class="btn btn-sm btn-outline">Volver y corregir</button>
+        <button type="button" id="modalResumenEnvioConfirmar" class="btn btn-primary">Enviar</button>
       </div>
     </div>
   </div>

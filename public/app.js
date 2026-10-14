@@ -465,10 +465,13 @@ function textoResumenImportacion(data) {
   }
 
   const f = data.fechas;
+  if (f && f.futuras === 0 && f.invalidas.length === 0 && f.pasadas.length === 0) {
+    texto += '\nFecha de envío individual: el archivo no trajo fechas (columna fecha_envio vacía o ausente). Estos contactos no se pueden usar con "Fecha individual por contacto" hasta que les pongas una fecha; con envío inmediato o fecha común no importa.';
+  }
   if (f && (f.futuras > 0 || f.invalidas.length > 0 || f.pasadas.length > 0)) {
-    texto += `\nFecha de envío individual: ✓ ${f.futuras} con fecha programada · ${f.sin_fecha} sin fecha.`;
+    texto += `\nFecha de envío individual: ✓ ${f.futuras} con fecha programada · ${f.sin_fecha} sin fecha en el archivo (si ya tenían una fecha, se conserva).`;
     if (f.invalidas.length > 0) {
-      texto += `\n⚠ ${f.invalidas.length} con una fecha que no se entendió (se importaron sin fecha): ${listaCorta(f.invalidas.map((i) => `${i.telefono} → "${i.valor}"`), 3)}. Usa por ejemplo 25/10/2026 9:00.`;
+      texto += `\n⚠ ${f.invalidas.length} con una fecha que no se entendió (no se cambió su fecha anterior): ${listaCorta(f.invalidas.map((i) => `${i.telefono} → "${i.valor}"`), 3)}. Usa por ejemplo 25/10/2026 9:00.`;
     }
     if (f.pasadas.length > 0) {
       texto += `\n⚠ ${f.pasadas.length} con una fecha que ya pasó: en "Fecha individual por contacto" se enviarían de inmediato (${listaCorta(f.pasadas.map((p) => p.telefono))}).`;
@@ -495,6 +498,68 @@ function avisoFechasIndividuales(contactosElegidos) {
   return aviso;
 }
 
+const ICONO_RELOJ = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>';
+const ICONO_ALERTA = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v4M12 17h.01" /><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" /></svg>';
+const ICONO_VACIO_FECHA = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M8 12h8" /></svg>';
+
+/** Etiqueta de estado de la fecha de envío individual (icono + texto, no solo color). */
+function htmlBadgeFecha(contacto) {
+  const estado = estadoFechaContacto(contacto);
+  if (estado === 'sin') {
+    return `<span class="fecha-badge fecha-badge-sin" title="Sin fecha propia: se omite si activas 'Fecha individual por contacto'">${ICONO_VACIO_FECHA} Sin fecha</span>`;
+  }
+  const cuando = formatearFechaHora(contacto.fecha_recordatorio);
+  if (estado === 'vencida') {
+    return `<span class="fecha-badge fecha-badge-vencida" title="Esta fecha ya pasó: con 'Fecha individual por contacto' se enviaría ahora mismo">${ICONO_ALERTA} Vencida · ${cuando}</span>`;
+  }
+  return `<span class="fecha-badge fecha-badge-ok">${ICONO_RELOJ} Programada · ${cuando}</span>`;
+}
+
+// Filtro de la lista de contactos por estado de su fecha: 'todos' | 'futura' | 'vencida' | 'sin'.
+let filtroFechaContactos = 'todos';
+
+const ETIQUETAS_FILTRO_FECHA = [
+  ['todos', 'Todos'],
+  ['futura', 'Con fecha'],
+  ['vencida', 'Vencidas'],
+  ['sin', 'Sin fecha'],
+];
+
+/** Resumen "N con fecha · M sin fecha · K vencidas" + chips para filtrar (solo si hay contactos). */
+function pintarResumenFechasContactos() {
+  const resumen = document.getElementById('resumenFechasContactos');
+  const chips = document.getElementById('chipsFiltroFecha');
+  if (contactos.length === 0) {
+    resumen.classList.add('hidden');
+    chips.classList.add('hidden');
+    return;
+  }
+  const conteo = conteoFechas(contactos);
+  resumen.classList.remove('hidden');
+  chips.classList.remove('hidden');
+  resumen.innerHTML = `
+    <span class="fecha-badge fecha-badge-ok">${ICONO_RELOJ} ${conteo.futura} con fecha</span>
+    <span class="fecha-badge fecha-badge-vencida">${ICONO_ALERTA} ${conteo.vencida} vencidas</span>
+    <span class="fecha-badge fecha-badge-sin">${ICONO_VACIO_FECHA} ${conteo.sin} sin fecha</span>
+    <button type="button" class="btn btn-sm btn-outline" id="btnSeleccionarConFecha">Seleccionar solo los que tienen fecha</button>
+  `;
+  chips.innerHTML = ETIQUETAS_FILTRO_FECHA.map(([clave, texto]) => {
+    const n = clave === 'todos' ? contactos.length : conteo[clave];
+    return `<button type="button" class="chip-filtro${filtroFechaContactos === clave ? ' activo' : ''}" data-filtro-fecha="${clave}" aria-pressed="${filtroFechaContactos === clave}">${texto} (${n})</button>`;
+  }).join('');
+  chips.querySelectorAll('[data-filtro-fecha]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      filtroFechaContactos = btn.dataset.filtroFecha;
+      renderContactos();
+    });
+  });
+  document.getElementById('btnSeleccionarConFecha').addEventListener('click', () => {
+    seleccionados.clear();
+    contactos.filter((c) => estadoFechaContacto(c) !== 'sin').forEach((c) => seleccionados.add(c.id));
+    renderContactos();
+  });
+}
+
 /**
  * Dibuja la tabla de contactos (checkbox, teléfono, nombre, fecha de envío
  * individual, acciones) dentro de `tbody` — la usan tanto la pestaña
@@ -502,8 +567,26 @@ function avisoFechasIndividuales(contactosElegidos) {
  * propio array/Set/callbacks, para no duplicar este bloque de UI. Un
  * contacto en edición (`editandoId`) muestra inputs en vez de texto.
  */
-function renderTablaContactos({ tbody, lista, seleccionados, editandoId, totalEl, onCambioSeleccion, onEliminar, onEditar, onCancelarEdicion, onGuardarEdicion }) {
+function renderTablaContactos({ tbody, lista, seleccionados, editandoId, totalEl, onCambioSeleccion, onEliminar, onEditar, onCancelarEdicion, onGuardarEdicion, vacioFiltrado = false }) {
   tbody.innerHTML = '';
+
+  if (lista.length === 0 && vacioFiltrado) {
+    tbody.innerHTML = `
+      <tr><td colspan="5">
+        <div class="empty-state">
+          <div>Ningún contacto coincide con este filtro.</div>
+          <div style="margin-top: 12px;"><button type="button" class="btn btn-sm btn-outline" data-quitar-filtro>Ver todos los contactos</button></div>
+        </div>
+      </td></tr>
+    `;
+    tbody.querySelector('[data-quitar-filtro]').addEventListener('click', () => {
+      filtroFechaContactos = 'todos';
+      renderContactos();
+    });
+    if (totalEl) totalEl.textContent = 0;
+    onCambioSeleccion();
+    return;
+  }
 
   if (lista.length === 0) {
     tbody.innerHTML = `
@@ -543,7 +626,7 @@ function renderTablaContactos({ tbody, lista, seleccionados, editandoId, totalEl
         <td><input type="checkbox" data-id="${c.id}" ${checked} /></td>
         <td>${c.telefono}</td>
         <td>${c.nombre ? escapeHtml(c.nombre) : '<span class="muted">(sin nombre)</span>'}</td>
-        <td>${c.fecha_recordatorio ? formatearFechaHora(c.fecha_recordatorio) : '<span class="muted">— (usa fecha masiva si aplica)</span>'}</td>
+        <td>${htmlBadgeFecha(c)}</td>
         <td>
           <button type="button" class="btn btn-sm btn-outline" data-editar="${c.id}">Editar</button>
           <button type="button" class="btn btn-sm btn-outline" data-del="${c.id}">${ICONO_ELIMINAR} Eliminar</button>
@@ -740,9 +823,12 @@ document.getElementById('btnCotizacion').addEventListener('click', () => {
 let editandoContactoId = null;
 
 function renderContactos() {
+  pintarResumenFechasContactos();
+  const visibles = filtroFechaContactos === 'todos' ? contactos : contactos.filter((c) => estadoFechaContacto(c) === filtroFechaContactos);
   renderTablaContactos({
     tbody: document.getElementById('tablaContactos'),
-    lista: contactos,
+    lista: visibles,
+    vacioFiltrado: filtroFechaContactos !== 'todos' && contactos.length > 0,
     seleccionados,
     editandoId: editandoContactoId,
     totalEl: document.getElementById('totalContactos'),
@@ -780,6 +866,9 @@ function renderContactos() {
 function actualizarContadorSeleccion() {
   document.getElementById('seleccionadosCount').textContent = `${seleccionados.size} seleccionados`;
   actualizarEstimadoCreditos();
+  // Los avisos de "Nueva campaña" dependen de qué contactos están elegidos.
+  renderParametros();
+  actualizarResumenFechasIndividual();
 }
 
 document.getElementById('btnSeleccionarTodos').addEventListener('click', () => {
@@ -1335,6 +1424,8 @@ function renderContactosEmpresa() {
 function actualizarContadorSeleccionEmpresa() {
   document.getElementById('seleccionadosCountEmpresa').textContent = `${empresaSeleccionados.size} seleccionados`;
   document.getElementById('empresaCampanaContactosCount').textContent = empresaSeleccionados.size;
+  renderParametrosEmpresa();
+  actualizarResumenFechasIndividualEmpresa();
 }
 
 document.getElementById('btnSeleccionarTodosEmpresa').addEventListener('click', () => {
@@ -1428,7 +1519,12 @@ document.getElementById('formImportarEmpresa').addEventListener('submit', async 
 });
 
 function renderParametrosEmpresa() {
-  renderParametrosEn(document.getElementById('parametrosListaEmpresa'), empresaParametros, () => renderParametrosEmpresa());
+  renderParametrosEn(document.getElementById('parametrosListaEmpresa'), empresaParametros, () => renderParametrosEmpresa(), {
+    contactosElegidos: () => empresaContactos.filter((c) => empresaSeleccionados.has(c.id)),
+    datalistId: 'columnasContactosEmpresaLista',
+  });
+  document.getElementById('columnasContactosEmpresaLista').innerHTML = columnasDeContactos(empresaContactos.filter((c) => empresaSeleccionados.has(c.id)))
+    .map((k) => `<option value="${escapeHtml(k)}"></option>`).join('');
 }
 
 document.getElementById('btnAgregarParametroEmpresa').addEventListener('click', () => {
@@ -1438,6 +1534,7 @@ document.getElementById('btnAgregarParametroEmpresa').addEventListener('click', 
 
 document.getElementById('checkFechaIndividualEmpresa').addEventListener('change', (e) => {
   document.getElementById('campoFechaComunEmpresa').classList.toggle('hidden', e.target.checked);
+  actualizarResumenFechasIndividualEmpresa();
 });
 
 document.getElementById('checkFlowBotonEmpresa').addEventListener('change', (e) => {
@@ -1453,25 +1550,49 @@ document.getElementById('btnEnviarCampanaEmpresa').addEventListener('click', asy
   const fechaProgramada = document.getElementById('inputFechaProgramadaEmpresa').value;
 
   if (!template_nombre) {
-    alert('Escribe el nombre exacto de la plantilla');
+    mostrarErrorEnvio(box, 'Escribe el nombre exacto de la plantilla.', document.getElementById('templateNombreEmpresa'));
     return;
   }
   if (contacto_ids.length === 0) {
-    alert('No hay contactos seleccionados para esta empresa');
+    mostrarErrorEnvio(box, 'No hay contactos seleccionados para esta empresa. Márcalos en la lista de arriba.');
     return;
   }
   const flowBoton = document.getElementById('checkFlowBotonEmpresa').checked;
   const flowActionData = leerFlowActionData(document.getElementById('inputFlowActionDataEmpresa'));
   if (flowBoton && !flowActionData.ok) {
-    alert('El JSON de "Datos para la primera pantalla del formulario" no es válido. Déjalo vacío si no lo necesitas.');
+    mostrarErrorEnvio(box, 'El JSON de "Datos para la primera pantalla del formulario" no es válido. Déjalo vacío si no lo necesitas.', document.getElementById('inputFlowActionDataEmpresa'));
     return;
   }
-  const confirmacion = individual
-    ? `¿Programar "${template_nombre}" para cada uno de los ${contacto_ids.length} contactos, según su propia fecha de recordatorio?${avisoFechasIndividuales(empresaContactos.filter((c) => empresaSeleccionados.has(c.id)))}`
-    : fechaProgramada
-      ? `¿Programar "${template_nombre}" para ${contacto_ids.length} contactos el ${new Date(fechaProgramada).toLocaleString('es-CO')}?`
-      : `¿Enviar "${template_nombre}" a ${contacto_ids.length} contactos ahora mismo?`;
-  if (!confirm(confirmacion)) return;
+  const errorParam = validarParametrosCliente(empresaParametros);
+  if (errorParam) {
+    mostrarErrorEnvio(box, errorParam.mensaje, document.querySelectorAll(`#parametrosListaEmpresa ${errorParam.selector}`)[errorParam.idx]);
+    return;
+  }
+  const analisis = analizarEnvio(empresaContactos.filter((c) => empresaSeleccionados.has(c.id)), empresaParametros, individual);
+  if (analisis.enviables.length === 0) {
+    const motivos = [];
+    if (analisis.sinDato.length > 0) motivos.push(`${analisis.sinDato.length} no tienen el dato de algún parámetro`);
+    if (analisis.sinFecha.length > 0) motivos.push(`${analisis.sinFecha.length} no tienen fecha de envío propia`);
+    mostrarErrorEnvio(box, `Ningún contacto seleccionado se puede enviar: ${motivos.join(' y ')}.`);
+    return;
+  }
+  box.classList.add('hidden');
+  const confirmado = await confirmarEnModal({
+    cuerpoHtml: htmlResumenEnvio({
+      template_nombre,
+      idioma,
+      cuerpo: '',
+      lista: empresaParametros,
+      individual,
+      fechaProgramada,
+      recurrente: document.getElementById('checkRecurrenteMensualEmpresa').checked,
+      analisis,
+    }),
+    textoConfirmar: individual || fechaProgramada
+      ? `Programar para ${analisis.enviables.length} ${analisis.enviables.length === 1 ? 'contacto' : 'contactos'}`
+      : `Enviar a ${analisis.enviables.length} ${analisis.enviables.length === 1 ? 'contacto' : 'contactos'}`,
+  });
+  if (!confirmado) return;
 
   const btn = document.getElementById('btnEnviarCampanaEmpresa');
   btn.disabled = true;
@@ -1508,11 +1629,13 @@ document.getElementById('btnEnviarCampanaEmpresa').addEventListener('click', asy
     btn.classList.remove('is-loading');
 
     if (individual) {
-      box.classList.add(data.omitidos.length > 0 ? 'error' : 'ok');
-      let texto = `Se programaron ${data.creadas} recordatorios individuales de ${data.total} contactos.`;
+      const hayOmitidos = data.omitidos.length > 0 || (data.omitidos_parametros || []).length > 0;
+      box.classList.add(hayOmitidos ? 'error' : 'ok');
+      let texto = `Se crearon ${data.creadas} envíos individuales de ${data.total} contactos. Cada uno sale en su propia fecha.`;
       if (data.omitidos.length > 0) {
-        texto += `\nOmitidos (sin fecha de recordatorio cargada): ${data.omitidos.join(', ')}`;
+        texto += `\nOmitidos (sin fecha de envío propia): ${listaCorta(data.omitidos)}`;
       }
+      texto += textoOmitidosParametros(data.omitidos_parametros);
       box.textContent = texto;
       btn.disabled = false;
     } else if (data.programada) {
@@ -1532,36 +1655,354 @@ document.getElementById('btnEnviarCampanaEmpresa').addEventListener('click', asy
 
 // ==================== CAMPAÑA (parámetros dinámicos) ====================
 
+// Mismo criterio que normalizeHeader() del servidor (csv.js): minúsculas y sin acentos.
+function normalizarClaveColumna(texto) {
+  return String(texto || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+function variablesDeContacto(contacto) {
+  try {
+    return JSON.parse(contacto.variables_json || '{}') || {};
+  } catch {
+    return {};
+  }
+}
+
+/** Valor literal que recibiría este contacto en el parámetro `p` ('' si no tiene el dato). Igual que resolverParametros() del servidor. */
+function valorDeParametro(p, contacto) {
+  if (p.tipo === 'nombre') return String(contacto.nombre || '').trim();
+  if (p.tipo === 'variable') return String(variablesDeContacto(contacto)[normalizarClaveColumna(p.clave)] ?? '').trim();
+  return String(p.valor || '').trim();
+}
+
+/** Columnas extra (variables) que traen los contactos dados, para sugerirlas al elegir "dato de una columna". */
+function columnasDeContactos(lista) {
+  const columnas = new Set();
+  lista.forEach((c) => Object.keys(variablesDeContacto(c)).forEach((k) => columnas.add(k)));
+  return Array.from(columnas).sort();
+}
+
+function recortar(texto, max = 60) {
+  const t = String(texto);
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
+/** Texto de ayuda bajo cada parámetro: qué se enviará y a cuántos contactos les falta el dato. */
+function ayudaDeParametro(p, elegidos) {
+  if (p.tipo === 'fijo') {
+    const valor = String(p.valor || '').trim();
+    if (!valor) return { texto: 'Escribe el texto que se enviará: ahora está vacío.', nivel: 'error' };
+    return { texto: `Todos recibirán exactamente: «${recortar(valor)}»`, nivel: 'ok' };
+  }
+  if (p.tipo === 'variable' && !String(p.clave || '').trim()) {
+    return { texto: 'Indica el nombre de la columna de tu archivo que trae este dato.', nivel: 'error' };
+  }
+  const queDato = p.tipo === 'nombre' ? 'nombre' : `dato de la columna «${String(p.clave).trim()}»`;
+  if (elegidos.length === 0) {
+    return { texto: `Cada contacto recibirá tal cual su ${queDato}. Selecciona contactos para comprobarlo.`, nivel: '' };
+  }
+  const faltan = elegidos.filter((c) => !valorDeParametro(p, c)).length;
+  if (faltan === 0) return { texto: `Los ${elegidos.length} contactos seleccionados tienen este ${p.tipo === 'nombre' ? 'nombre' : 'dato'}.`, nivel: 'ok' };
+  if (faltan === elegidos.length && p.tipo === 'variable') {
+    const columnas = columnasDeContactos(elegidos);
+    return {
+      texto: `Ningún contacto seleccionado tiene la columna «${String(p.clave).trim()}».${columnas.length ? ` Columnas disponibles: ${columnas.join(', ')}.` : ' Tus contactos no traen columnas extra.'}`,
+      nivel: 'error',
+    };
+  }
+  return { texto: `${faltan} de ${elegidos.length} contactos no tienen este ${p.tipo === 'nombre' ? 'nombre' : 'dato'} y se omitirán (no se envía vacío ni con su teléfono).`, nivel: 'warn' };
+}
+
+/** Primer error de la lista de parámetros (para frenar el envío con un mensaje claro), o null. */
+function validarParametrosCliente(lista) {
+  for (let i = 0; i < lista.length; i += 1) {
+    const p = lista[i];
+    if (p.tipo === 'fijo' && !String(p.valor || '').trim()) return { idx: i, mensaje: `Escribe el texto fijo del parámetro {{${i + 1}}} o cambia su tipo.`, selector: '.param-valor' };
+    if (p.tipo === 'variable' && !String(p.clave || '').trim()) return { idx: i, mensaje: `Indica la columna del archivo para el parámetro {{${i + 1}}}.`, selector: '.param-clave' };
+  }
+  return null;
+}
+
+/** Texto de la plantilla con los {{N}} resaltados; con `valores` los reemplaza (y marca los que faltan). */
+function htmlCuerpoPlantilla(cuerpo, valores = null) {
+  return escapeHtml(cuerpo).replace(/\{\{(\d+)\}\}/g, (hueco, n) => {
+    if (!valores) return `<mark class="param-hueco">${hueco}</mark>`;
+    const valor = valores[Number(n) - 1];
+    if (valor === undefined) return `<mark class="param-hueco param-hueco-falta">${hueco}</mark>`;
+    if (valor === '') return '<mark class="param-hueco param-hueco-falta">[falta el dato]</mark>';
+    return `<mark class="param-valor-previo">${escapeHtml(valor)}</mark>`;
+  });
+}
+
+/** Cantidad de parámetros que pide el texto de una plantilla (el {{N}} más alto). */
+function cantidadParametrosDeCuerpo(cuerpo) {
+  let max = 0;
+  String(cuerpo || '').replace(/\{\{(\d+)\}\}/g, (_, n) => { max = Math.max(max, Number(n)); return ''; });
+  return max;
+}
+
+// Cuerpo de la plantilla elegida en "Nueva campaña" (vacío si se escribió el nombre a mano o no tiene texto cargado).
+let plantillaCuerpoActual = '';
+
+/** Refresca el texto de la plantilla, el aviso de cantidad, las columnas sugeridas y la vista previa del mensaje. */
+function actualizarPanelParametros() {
+  const elegidos = contactos.filter((c) => seleccionados.has(c.id));
+  const bloqueCuerpo = document.getElementById('plantillaCuerpoBloque');
+  const aviso = document.getElementById('parametrosAviso');
+  const vista = document.getElementById('parametrosVistaPrevia');
+
+  document.getElementById('columnasContactosLista').innerHTML = columnasDeContactos(elegidos)
+    .map((k) => `<option value="${escapeHtml(k)}"></option>`).join('');
+
+  if (!plantillaCuerpoActual) {
+    bloqueCuerpo.classList.add('hidden');
+    aviso.classList.add('hidden');
+    vista.classList.add('hidden');
+    return;
+  }
+
+  bloqueCuerpo.classList.remove('hidden');
+  document.getElementById('plantillaCuerpoTexto').innerHTML = htmlCuerpoPlantilla(plantillaCuerpoActual);
+
+  const pedidos = cantidadParametrosDeCuerpo(plantillaCuerpoActual);
+  if (pedidos !== parametros.length) {
+    aviso.className = 'param-aviso param-aviso-warn';
+    aviso.textContent = pedidos === 0
+      ? `Esta plantilla no usa parámetros, pero tienes ${parametros.length} configurados. Quítalos para no enviar datos de más.`
+      : `Esta plantilla tiene ${pedidos} ${pedidos === 1 ? 'parámetro' : 'parámetros'} y tienes ${parametros.length} configurados. Deben coincidir.`;
+  } else {
+    aviso.className = 'param-aviso hidden';
+    aviso.textContent = '';
+  }
+
+  // Vista previa con el primer contacto seleccionado que tenga todos los datos (si no hay, con el primero).
+  const ejemplo = elegidos.find((c) => parametros.every((p) => valorDeParametro(p, c))) || elegidos[0];
+  vista.classList.remove('hidden');
+  const quien = document.getElementById('parametrosVistaPreviaQuien');
+  if (ejemplo) {
+    quien.textContent = `· con los datos de ${ejemplo.nombre || ejemplo.telefono}`;
+    document.getElementById('parametrosVistaPreviaTexto').innerHTML = htmlCuerpoPlantilla(plantillaCuerpoActual, parametros.map((p) => valorDeParametro(p, ejemplo)));
+  } else {
+    quien.textContent = '· selecciona contactos para ver un ejemplo real';
+    document.getElementById('parametrosVistaPreviaTexto').innerHTML = htmlCuerpoPlantilla(plantillaCuerpoActual, parametros.map((p) => (p.tipo === 'fijo' ? String(p.valor || '').trim() : undefined)));
+  }
+}
+
+// ---- Estado de la fecha de envío individual de un contacto ----
+
+/** 'sin' (no tiene), 'vencida' (ya pasó: se enviaría ahora mismo) o 'futura' (queda programada). */
+function estadoFechaContacto(contacto) {
+  const fecha = parsearFechaUtc(contacto.fecha_recordatorio);
+  if (!fecha) return 'sin';
+  return fecha.getTime() <= Date.now() ? 'vencida' : 'futura';
+}
+
+function conteoFechas(lista) {
+  const conteo = { futura: 0, vencida: 0, sin: 0 };
+  lista.forEach((c) => { conteo[estadoFechaContacto(c)] += 1; });
+  return conteo;
+}
+
+/** Pinta bajo el checkbox "Fecha individual" cuántos de los contactos elegidos quedan programados, se envían ya o se omiten. */
+function pintarResumenFechasIndividual(box, activo, elegidos) {
+  if (!activo) {
+    box.classList.add('hidden');
+    return;
+  }
+  box.classList.remove('hidden');
+  if (elegidos.length === 0) {
+    box.textContent = 'Selecciona contactos para ver cuántos tienen fecha propia. Con esta opción se ignora la fecha común.';
+    return;
+  }
+  const { futura, vencida, sin } = conteoFechas(elegidos);
+  const partes = [`De ${elegidos.length} contactos seleccionados: ${futura} con fecha futura (se programan)`];
+  if (vencida > 0) partes.push(`${vencida} con fecha vencida (se enviarán ahora mismo)`);
+  if (sin > 0) partes.push(`${sin} sin fecha (se omitirán)`);
+  box.textContent = `${partes.join(' · ')}. Con esta opción se ignora la fecha común.`;
+}
+
+function actualizarResumenFechasIndividual() {
+  pintarResumenFechasIndividual(
+    document.getElementById('resumenFechasIndividual'),
+    document.getElementById('checkFechaIndividual').checked,
+    contactos.filter((c) => seleccionados.has(c.id))
+  );
+}
+
+function actualizarResumenFechasIndividualEmpresa() {
+  pintarResumenFechasIndividual(
+    document.getElementById('resumenFechasIndividualEmpresa'),
+    document.getElementById('checkFechaIndividualEmpresa').checked,
+    empresaContactos.filter((c) => empresaSeleccionados.has(c.id))
+  );
+}
+
+// ---- Revisión previa al envío ----
+
+/**
+ * Separa los contactos elegidos en: se enviarán, les falta el dato de un
+ * parámetro, o (modo individual) no tienen fecha propia. Igual criterio que
+ * el servidor, para que lo que se muestra antes sea lo que pasa después.
+ */
+function analizarEnvio(elegidos, lista, individual) {
+  const analisis = { enviables: [], sinDato: [], sinFecha: [], vencidas: 0, futuras: 0 };
+  elegidos.forEach((c) => {
+    const faltantes = lista.map((p, i) => (valorDeParametro(p, c) ? 0 : i + 1)).filter(Boolean);
+    if (faltantes.length > 0) {
+      analisis.sinDato.push({ contacto: c, faltantes });
+      return;
+    }
+    if (individual) {
+      const estado = estadoFechaContacto(c);
+      if (estado === 'sin') {
+        analisis.sinFecha.push(c);
+        return;
+      }
+      if (estado === 'vencida') analisis.vencidas += 1;
+      else analisis.futuras += 1;
+    }
+    analisis.enviables.push(c);
+  });
+  return analisis;
+}
+
+function etiquetaParametro(p, idx) {
+  if (p.tipo === 'nombre') return `{{${idx + 1}}} → nombre del contacto`;
+  if (p.tipo === 'variable') return `{{${idx + 1}}} → columna «${escapeHtml(String(p.clave).trim())}»`;
+  return `{{${idx + 1}}} → texto fijo «${escapeHtml(recortar(String(p.valor).trim()))}»`;
+}
+
+/** HTML del modal "Revisa antes de enviar". */
+function htmlResumenEnvio({ template_nombre, idioma, cuerpo, lista, individual, fechaProgramada, recurrente, analisis }) {
+  const filas = [];
+  filas.push(`<div class="resumen-fila"><dt>Plantilla</dt><dd>${escapeHtml(template_nombre)} <span class="muted">· idioma ${escapeHtml(idioma)}</span></dd></div>`);
+
+  if (lista.length > 0) {
+    filas.push(`<div class="resumen-fila"><dt>Parámetros</dt><dd><ul class="resumen-lista">${lista.map((p, i) => `<li>${etiquetaParametro(p, i)}</li>`).join('')}</ul></dd></div>`);
+  }
+  if (cuerpo && analisis.enviables.length > 0) {
+    const ejemplo = analisis.enviables[0];
+    filas.push(`<div class="resumen-fila"><dt>Mensaje de ejemplo <span class="muted">(para ${escapeHtml(ejemplo.nombre || ejemplo.telefono)})</span></dt><dd><div class="param-preview-texto">${htmlCuerpoPlantilla(cuerpo, lista.map((p) => valorDeParametro(p, ejemplo)))}</div></dd></div>`);
+  }
+
+  let cuando;
+  if (individual) {
+    cuando = `Cada contacto en su propia fecha: ${analisis.futuras} programados`;
+    if (analisis.vencidas > 0) cuando += `, <strong>${analisis.vencidas} con fecha vencida que se enviarán ahora mismo</strong>`;
+  } else if (fechaProgramada) {
+    cuando = `Programado para ${escapeHtml(new Date(fechaProgramada).toLocaleString('es-CO'))}`;
+  } else {
+    cuando = '<strong>Ahora mismo</strong>';
+  }
+  if (recurrente) cuando += ' · se repite cada mes';
+  filas.push(`<div class="resumen-fila"><dt>Cuándo</dt><dd>${cuando}</dd></div>`);
+
+  let destinatarios = `<strong>${analisis.enviables.length}</strong> ${analisis.enviables.length === 1 ? 'contacto' : 'contactos'} recibirán el mensaje`;
+  filas.push(`<div class="resumen-fila"><dt>Se enviará a</dt><dd>${destinatarios}</dd></div>`);
+
+  if (analisis.sinDato.length > 0) {
+    const nombres = analisis.sinDato.map((o) => `${escapeHtml(o.contacto.telefono)} (falta {{${o.faltantes.join('}}, {{')}}})`);
+    filas.push(`<div class="resumen-fila resumen-aviso"><dt>Se omitirán por falta de dato</dt><dd>${analisis.sinDato.length}: ${nombres.slice(0, 5).join(', ')}${nombres.length > 5 ? ` y ${nombres.length - 5} más` : ''}</dd></div>`);
+  }
+  if (analisis.sinFecha.length > 0) {
+    const tels = analisis.sinFecha.map((c) => escapeHtml(c.telefono));
+    filas.push(`<div class="resumen-fila resumen-aviso"><dt>Se omitirán por no tener fecha de envío</dt><dd>${analisis.sinFecha.length}: ${tels.slice(0, 5).join(', ')}${tels.length > 5 ? ` y ${tels.length - 5} más` : ''}</dd></div>`);
+  }
+  return `<dl>${filas.join('')}</dl>`;
+}
+
+/** Abre el modal de revisión y resuelve `true` si el usuario confirma, `false` si vuelve a corregir (botón, Esc o clic fuera). */
+function confirmarEnModal({ cuerpoHtml, textoConfirmar }) {
+  const modal = document.getElementById('modalResumenEnvio');
+  const btnConfirmar = document.getElementById('modalResumenEnvioConfirmar');
+  const btnVolver = document.getElementById('modalResumenEnvioVolver');
+  const previoFoco = document.activeElement;
+  document.getElementById('modalResumenEnvioCuerpo').innerHTML = cuerpoHtml;
+  btnConfirmar.textContent = textoConfirmar;
+  modal.classList.remove('hidden');
+  btnConfirmar.focus();
+
+  return new Promise((resolve) => {
+    const cerrar = (resultado) => {
+      modal.classList.add('hidden');
+      document.removeEventListener('keydown', alTeclear);
+      modal.removeEventListener('click', alClicFuera);
+      btnConfirmar.onclick = null;
+      btnVolver.onclick = null;
+      if (previoFoco && previoFoco.focus) previoFoco.focus();
+      resolve(resultado);
+    };
+    const alTeclear = (e) => { if (e.key === 'Escape') cerrar(false); };
+    const alClicFuera = (e) => { if (e.target === modal) cerrar(false); };
+    document.addEventListener('keydown', alTeclear);
+    modal.addEventListener('click', alClicFuera);
+    btnConfirmar.onclick = () => cerrar(true);
+    btnVolver.onclick = () => cerrar(false);
+  });
+}
+
+/** Muestra un error de validación en la caja de resultado (en vez de un alert) y lleva el foco al campo con el problema. */
+function mostrarErrorEnvio(box, mensaje, campo = null) {
+  box.classList.remove('hidden', 'ok');
+  box.classList.add('error');
+  box.textContent = mensaje;
+  box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  if (campo) campo.focus();
+}
+
+/** Texto de los contactos que el servidor dejó afuera por falta de dato en un parámetro. */
+function textoOmitidosParametros(omitidosParametros) {
+  if (!omitidosParametros || omitidosParametros.length === 0) return '';
+  const detalle = omitidosParametros.map((o) => `${o.telefono} (falta ${o.faltantes.join(', ')})`);
+  return `\nOmitidos por falta de dato en un parámetro: ${listaCorta(detalle)}`;
+}
+
 /**
  * Dibuja el builder de parámetros ({{1}}, {{2}}, …) dentro de `cont`, a
  * partir del array `lista` — la usan tanto la pestaña general Nueva
  * campaña como la campaña de una empresa, cada una con su propio
  * contenedor y su propio array, para no duplicar este bloque de UI.
  */
-function renderParametrosEn(cont, lista, onChange) {
+function renderParametrosEn(cont, lista, onChange, { contactosElegidos = () => [], datalistId = 'columnasContactosLista', onEdit = () => {} } = {}) {
   cont.innerHTML = '';
   lista.forEach((p, idx) => {
-    const row = document.createElement('div');
-    row.className = 'param-row';
-    row.innerHTML = `
-      <span class="param-index">{{${idx + 1}}}</span>
-      <select data-idx="${idx}" class="param-tipo">
-        <option value="nombre" ${p.tipo === 'nombre' ? 'selected' : ''}>Nombre del contacto</option>
-        <option value="variable" ${p.tipo === 'variable' ? 'selected' : ''}>Variable del contacto (CSV)</option>
-        <option value="fijo" ${p.tipo === 'fijo' ? 'selected' : ''}>Texto fijo (igual para todos)</option>
-      </select>
-      <input type="text" data-idx="${idx}" class="param-valor" placeholder="Texto fijo…"
-        value="${p.tipo === 'fijo' ? (p.valor || '') : ''}"
-        ${p.tipo === 'fijo' ? '' : 'disabled'} />
-      <input type="text" data-idx="${idx}" class="param-clave" placeholder="Columna del CSV (ej: fecha_cita)"
-        value="${p.tipo === 'variable' ? (p.clave || '') : ''}"
-        ${p.tipo === 'variable' ? '' : 'disabled'} />
-      <button type="button" class="btn-danger-sm" data-remove="${idx}" title="Quitar" aria-label="Quitar parámetro ${idx + 1}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
-      </button>
+    const fila = document.createElement('div');
+    fila.className = 'param-fila';
+    const esFijo = p.tipo === 'fijo';
+    const esVariable = p.tipo === 'variable';
+    fila.innerHTML = `
+      <div class="param-row">
+        <span class="param-index" aria-hidden="true">{{${idx + 1}}}</span>
+        <select data-idx="${idx}" class="param-tipo" aria-label="¿Qué va en {{${idx + 1}}}?">
+          <option value="nombre" ${p.tipo === 'nombre' ? 'selected' : ''}>Nombre del contacto</option>
+          <option value="variable" ${esVariable ? 'selected' : ''}>Dato de una columna del archivo</option>
+          <option value="fijo" ${esFijo ? 'selected' : ''}>Texto fijo (igual para todos)</option>
+        </select>
+        <input type="text" data-idx="${idx}" class="param-valor${esFijo ? '' : ' hidden'}" placeholder="Escribe el texto exacto que se enviará"
+          aria-label="Texto fijo de {{${idx + 1}}}" value="${escapeHtml(p.valor || '')}" />
+        <input type="text" data-idx="${idx}" class="param-clave${esVariable ? '' : ' hidden'}" placeholder="Nombre de la columna (ej: fecha_cita)"
+          aria-label="Columna del archivo para {{${idx + 1}}}" list="${datalistId}" autocomplete="off" value="${escapeHtml(p.clave || '')}" />
+        <button type="button" class="btn-danger-sm" data-remove="${idx}" title="Quitar" aria-label="Quitar parámetro ${idx + 1}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
+        </button>
+      </div>
+      <div class="param-ayuda" data-ayuda="${idx}" role="status" aria-live="polite"></div>
     `;
-    cont.appendChild(row);
+    cont.appendChild(fila);
   });
+
+  // Mensaje bajo cada fila: qué se enviará y a cuántos contactos les falta el dato.
+  const pintarAyudas = () => {
+    const elegidos = contactosElegidos();
+    cont.querySelectorAll('[data-ayuda]').forEach((el) => {
+      const idx = Number(el.dataset.ayuda);
+      const p = lista[idx];
+      const { texto, nivel } = ayudaDeParametro(p, elegidos);
+      el.textContent = texto;
+      el.className = `param-ayuda${nivel ? ` param-ayuda-${nivel}` : ''}`;
+    });
+    onEdit();
+  };
 
   cont.querySelectorAll('.param-tipo').forEach((sel) => {
     sel.addEventListener('change', (e) => {
@@ -1574,14 +2015,19 @@ function renderParametrosEn(cont, lista, onChange) {
     inp.addEventListener('input', (e) => {
       const idx = Number(e.target.dataset.idx);
       lista[idx].valor = e.target.value;
+      pintarAyudas();
     });
+    inp.addEventListener('blur', pintarAyudas);
   });
   cont.querySelectorAll('.param-clave').forEach((inp) => {
     inp.addEventListener('input', (e) => {
       const idx = Number(e.target.dataset.idx);
       lista[idx].clave = e.target.value;
+      pintarAyudas();
     });
+    inp.addEventListener('blur', pintarAyudas);
   });
+  pintarAyudas();
   cont.querySelectorAll('[data-remove]').forEach((btn) => {
     btn.addEventListener('click', () => {
       lista.splice(Number(btn.dataset.remove), 1);
@@ -1591,7 +2037,10 @@ function renderParametrosEn(cont, lista, onChange) {
 }
 
 function renderParametros() {
-  renderParametrosEn(document.getElementById('parametrosLista'), parametros, renderParametros);
+  renderParametrosEn(document.getElementById('parametrosLista'), parametros, renderParametros, {
+    contactosElegidos: () => contactos.filter((c) => seleccionados.has(c.id)),
+    onEdit: actualizarPanelParametros,
+  });
 }
 
 document.getElementById('btnAgregarParametro').addEventListener('click', () => {
@@ -1601,6 +2050,7 @@ document.getElementById('btnAgregarParametro').addEventListener('click', () => {
 
 document.getElementById('checkFechaIndividual').addEventListener('change', (e) => {
   document.getElementById('campoFechaComun').classList.toggle('hidden', e.target.checked);
+  actualizarResumenFechasIndividual();
 });
 
 document.getElementById('checkFlowBoton').addEventListener('change', (e) => {
@@ -1633,19 +2083,38 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
   const fechaProgramada = document.getElementById('inputFechaProgramada').value;
 
   if (!template_nombre) {
-    alert('Escribe el nombre exacto de la plantilla');
+    mostrarErrorEnvio(box, 'Escribe el nombre exacto de la plantilla (paso 1).', document.getElementById('templateNombre'));
     return;
   }
   if (contacto_ids.length === 0) {
-    alert('No hay contactos seleccionados (elígelos en la pestaña "Contactos")');
+    mostrarErrorEnvio(box, 'No hay contactos seleccionados. Elígelos en la pestaña "Contactos" y vuelve aquí.');
     return;
   }
   const flowBoton = document.getElementById('checkFlowBoton').checked;
   const flowActionData = leerFlowActionData(document.getElementById('inputFlowActionData'));
   if (flowBoton && !flowActionData.ok) {
-    alert('El JSON de "Datos para la primera pantalla del formulario" no es válido. Déjalo vacío si no lo necesitas.');
+    mostrarErrorEnvio(box, 'El JSON de "Datos para la primera pantalla del formulario" no es válido. Déjalo vacío si no lo necesitas.', document.getElementById('inputFlowActionData'));
     return;
   }
+
+  const errorParam = validarParametrosCliente(parametros);
+  if (errorParam) {
+    mostrarErrorEnvio(box, errorParam.mensaje, document.querySelectorAll(`#parametrosLista ${errorParam.selector}`)[errorParam.idx]);
+    return;
+  }
+  const elegidos = contactos.filter((c) => seleccionados.has(c.id));
+  const analisis = analizarEnvio(elegidos, parametros, individual);
+  if (analisis.enviables.length === 0) {
+    const motivos = [];
+    if (analisis.sinDato.length > 0) motivos.push(`${analisis.sinDato.length} no tienen el dato de algún parámetro`);
+    if (analisis.sinFecha.length > 0) motivos.push(`${analisis.sinFecha.length} no tienen fecha de envío propia`);
+    mostrarErrorEnvio(box, `Ningún contacto seleccionado se puede enviar: ${motivos.join(' y ')}. Revisa los parámetros (paso 2)${individual ? ' o las fechas en la pestaña "Contactos"' : ''}.`);
+    return;
+  }
+  box.classList.add('hidden');
+
+  // Solo los que se pueden enviar de verdad cuentan para la cuota o el saldo.
+  const idsEnviables = analisis.enviables.map((c) => c.id);
 
   // Cliente con plan: si la campaña pide más de lo que queda de cuota, no
   // se reparte solo con créditos — se avisa y se deja elegir entre
@@ -1653,22 +2122,24 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
   const categoriaCampana = document.getElementById('selectCategoriaCampana').value;
   if (misPlan?.aplica) {
     const disponibles = misPlan.contactosQueEntran[categoriaCampana] || 0;
-    if (contacto_ids.length > disponibles) {
+    if (idsEnviables.length > disponibles) {
       mostrarModalCuota({
         disponibles,
         categoria: categoriaCampana,
-        onEnviarParcial: () => continuarEnvioCampana(contacto_ids.slice(0, disponibles), { template_nombre, idioma, individual, fechaProgramada, flowBoton, flowActionData, categoriaCampana }),
+        onEnviarParcial: () => continuarEnvioCampana(idsEnviables.slice(0, disponibles), { template_nombre, idioma, individual, fechaProgramada, flowBoton, flowActionData, categoriaCampana }),
       });
       return;
     }
   }
 
-  const confirmacion = individual
-    ? `¿Programar "${template_nombre}" para cada uno de los ${contacto_ids.length} contactos seleccionados, según su propia fecha de recordatorio?${avisoFechasIndividuales(contactos.filter((c) => seleccionados.has(c.id)))}`
-    : fechaProgramada
-      ? `¿Programar "${template_nombre}" para ${contacto_ids.length} contactos el ${new Date(fechaProgramada).toLocaleString('es-CO')}?`
-      : `¿Enviar "${template_nombre}" a ${contacto_ids.length} contactos ahora mismo?`;
-  if (!confirm(confirmacion)) return;
+  const recurrente = document.getElementById('checkRecurrenteMensual').checked;
+  const confirmado = await confirmarEnModal({
+    cuerpoHtml: htmlResumenEnvio({ template_nombre, idioma, cuerpo: plantillaCuerpoActual, lista: parametros, individual, fechaProgramada, recurrente, analisis }),
+    textoConfirmar: individual || fechaProgramada
+      ? `Programar para ${analisis.enviables.length} ${analisis.enviables.length === 1 ? 'contacto' : 'contactos'}`
+      : `Enviar a ${analisis.enviables.length} ${analisis.enviables.length === 1 ? 'contacto' : 'contactos'}`,
+  });
+  if (!confirmado) return;
 
   continuarEnvioCampana(contacto_ids, { template_nombre, idioma, individual, fechaProgramada, flowBoton, flowActionData, categoriaCampana });
 });
@@ -1752,11 +2223,13 @@ async function continuarEnvioCampana(contacto_ids, { template_nombre, idioma, in
     if (guia.activa) refrescarDatosGuia();
 
     if (individual) {
-      box.classList.add(data.omitidos.length > 0 ? 'error' : 'ok');
-      let texto = `Se programaron ${data.creadas} recordatorios individuales de ${data.total} contactos.`;
+      const hayOmitidos = data.omitidos.length > 0 || (data.omitidos_parametros || []).length > 0;
+      box.classList.add(hayOmitidos ? 'error' : 'ok');
+      let texto = `Se crearon ${data.creadas} envíos individuales de ${data.total} contactos. Cada uno sale en su propia fecha: revísalos en "Historial".`;
       if (data.omitidos.length > 0) {
-        texto += `\nOmitidos (sin fecha de recordatorio cargada): ${data.omitidos.join(', ')}`;
+        texto += `\nOmitidos (sin fecha de envío propia): ${listaCorta(data.omitidos)}`;
       }
+      texto += textoOmitidosParametros(data.omitidos_parametros);
       box.textContent = texto;
       btn.disabled = false;
     } else if (data.programada) {
@@ -3544,9 +4017,28 @@ function actualizarDatalistPlantillas(plantillas) {
   guia.plantillasAprobadas = aprobadas;
 }
 
-document.getElementById('templateNombre').addEventListener('change', (e) => {
-  const elegida = (guia.plantillasAprobadas || []).find((p) => p.nombre === e.target.value.trim());
+function alElegirPlantilla() {
+  const nombre = document.getElementById('templateNombre').value.trim();
+  const elegida = (guia.plantillasAprobadas || []).find((p) => p.nombre === nombre);
   if (elegida?.idioma) document.getElementById('templateIdioma').value = elegida.idioma;
+
+  plantillaCuerpoActual = elegida?.body_texto || '';
+  // Si aún no hay parámetros, se crean tantos como {{N}} pida la plantilla.
+  const pedidos = cantidadParametrosDeCuerpo(plantillaCuerpoActual);
+  if (pedidos > 0 && parametros.length === 0) {
+    for (let i = 0; i < pedidos; i += 1) parametros.push({ tipo: 'nombre', valor: '', clave: '' });
+  }
+  renderParametros();
+}
+
+document.getElementById('templateNombre').addEventListener('change', alElegirPlantilla);
+document.getElementById('templateNombre').addEventListener('input', () => {
+  // Al escribir a mano un nombre que ya no coincide, se quita el texto de la plantilla anterior.
+  const nombre = document.getElementById('templateNombre').value.trim();
+  if (plantillaCuerpoActual && !(guia.plantillasAprobadas || []).some((p) => p.nombre === nombre)) {
+    plantillaCuerpoActual = '';
+    actualizarPanelParametros();
+  }
 });
 
 /** CSV de ejemplo con las columnas que entiende la importación (ver /api/contactos/importar). */
