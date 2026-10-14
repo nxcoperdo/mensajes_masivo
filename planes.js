@@ -132,9 +132,24 @@ export function contactosQueEntran(clienteId, categoria) {
   return Math.floor(cuota.mediosLibres / pesoMensaje(categoria));
 }
 
-export function registrarConsumoPlan({ clienteId, medios, motivo, campanaId = null }) {
+/**
+ * `acumular: true` (lo usa `procesarCampana`, que descuenta mensaje a mensaje
+ * para que el saldo baje en vivo): si ya hay una fila de esta campaña, le
+ * suma en vez de insertar otra — así el ledger queda con UNA fila por
+ * campaña y no con una por mensaje.
+ */
+export function registrarConsumoPlan({ clienteId, medios, motivo, campanaId = null, acumular = false }) {
   const mediosEnteros = Math.trunc(Number(medios));
   if (!mediosEnteros) return;
+  if (acumular && campanaId != null) {
+    const existente = db
+      .prepare('SELECT id FROM plan_consumos WHERE cliente_id = ? AND campana_id = ? ORDER BY id LIMIT 1')
+      .get(clienteId, campanaId);
+    if (existente) {
+      db.prepare('UPDATE plan_consumos SET medios_mensajes = medios_mensajes + ? WHERE id = ?').run(mediosEnteros, existente.id);
+      return;
+    }
+  }
   db.prepare(
     'INSERT INTO plan_consumos (cliente_id, medios_mensajes, motivo, campana_id) VALUES (?, ?, ?, ?)'
   ).run(clienteId, mediosEnteros, motivo || null, campanaId);

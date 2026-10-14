@@ -77,16 +77,25 @@ export function costoPorMensaje(categoria, tipoContenido) {
  * carga manual del admin como el descuento al terminar una campaña pasan
  * por acá, para que el saldo y el ledger nunca queden desincronizados.
  */
-export function registrarMovimientoCreditos({ clienteId, cantidad, motivo, campanaId = null }) {
+export function registrarMovimientoCreditos({ clienteId, cantidad, motivo, campanaId = null, acumular = false }) {
   const cantidadEntera = Math.trunc(Number(cantidad));
   if (!cantidadEntera) return;
 
   db.exec('BEGIN');
   try {
     db.prepare('UPDATE clientes SET creditos = creditos + ? WHERE id = ?').run(cantidadEntera, clienteId);
-    db.prepare(
-      'INSERT INTO creditos_movimientos (cliente_id, cantidad, motivo, campana_id) VALUES (?, ?, ?, ?)'
-    ).run(clienteId, cantidadEntera, motivo || null, campanaId);
+    // `acumular: true` (descuento mensaje a mensaje durante una campaña):
+    // una sola fila de ledger por campaña, que se va actualizando.
+    const existente = acumular && campanaId != null
+      ? db.prepare('SELECT id FROM creditos_movimientos WHERE cliente_id = ? AND campana_id = ? ORDER BY id LIMIT 1').get(clienteId, campanaId)
+      : null;
+    if (existente) {
+      db.prepare('UPDATE creditos_movimientos SET cantidad = cantidad + ? WHERE id = ?').run(cantidadEntera, existente.id);
+    } else {
+      db.prepare(
+        'INSERT INTO creditos_movimientos (cliente_id, cantidad, motivo, campana_id) VALUES (?, ?, ?, ?)'
+      ).run(clienteId, cantidadEntera, motivo || null, campanaId);
+    }
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');

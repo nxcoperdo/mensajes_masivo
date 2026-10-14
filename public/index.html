@@ -30,6 +30,16 @@
       </div>
     </div>
     <div class="topbar-actions">
+      <button type="button" id="chipSaldo" class="saldo-chip hidden" aria-live="polite">
+        <span class="saldo-chip-icono" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.6 8.6 0 0 1-3.6-.8L3 20l1.1-4.9A8.4 8.4 0 1 1 21 11.5Z" /></svg>
+        </span>
+        <span class="saldo-chip-texto">
+          <span class="saldo-chip-valor" id="chipSaldoValor">—</span>
+          <span class="saldo-chip-label" id="chipSaldoLabel">disponibles</span>
+        </span>
+        <span class="saldo-chip-barra" id="chipSaldoBarra" aria-hidden="true"><i></i></span>
+      </button>
       <span id="configBadge" class="badge badge-muted">Verificando configuración…</span>
       <button type="button" id="btnTheme" class="icon-btn" title="Cambiar tema" aria-label="Cambiar entre modo claro y oscuro">
         <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">

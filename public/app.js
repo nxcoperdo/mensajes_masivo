@@ -1735,13 +1735,108 @@ async function cargarMisCreditos() {
   if (!data.aplica) {
     misCreditos = null;
     document.getElementById('bloqueCreditosCampana').classList.add('hidden');
+    actualizarChipSaldo();
     return;
   }
   misCreditos = data;
   document.getElementById('bloqueCreditosCampana').classList.remove('hidden');
   document.getElementById('notaCostoCampana').textContent = 'El costo por mensaje varía si la plantilla lleva imagen o video adjunto (arriba). El estimado es en pesos, sin IVA — el 19% se muestra aparte como referencia, no se descuenta del saldo.';
   actualizarEstimadoCreditos();
+  actualizarChipSaldo();
 }
+
+// ==================== CHIP DE SALDO (HEADER) ====================
+
+let chipSaldoUltimoValor = null; // último número mostrado — de ahí arranca la animación
+let chipSaldoAnimacion = null;
+
+/** Hace "correr" el número desde `desde` hasta `hasta` en vez de saltar. */
+function animarNumeroChip(elemento, desde, hasta, formato) {
+  if (chipSaldoAnimacion) cancelAnimationFrame(chipSaldoAnimacion);
+  const sinAnimacion = window.matchMedia('(prefers-reduced-motion: reduce)').matches || desde === hasta;
+  if (sinAnimacion) {
+    elemento.textContent = formato(hasta);
+    return;
+  }
+  const duracion = 600;
+  const inicio = performance.now();
+  const paso = (ahora) => {
+    const t = Math.min(1, (ahora - inicio) / duracion);
+    const suave = 1 - Math.pow(1 - t, 3); // easeOutCubic
+    elemento.textContent = formato(Math.round(desde + (hasta - desde) * suave));
+    chipSaldoAnimacion = t < 1 ? requestAnimationFrame(paso) : null;
+  };
+  chipSaldoAnimacion = requestAnimationFrame(paso);
+}
+
+/**
+ * Pinta el chip del header con lo que le queda al cliente independiente:
+ * mensajes del plan (+ barra de cuota) o saldo en $ si usa créditos. Oculto
+ * para el admin o si no tiene ni plan ni créditos. Se llama cada vez que se
+ * recarga el plan/saldo, así baja en vivo mientras se envía una campaña.
+ */
+function actualizarChipSaldo() {
+  const chip = document.getElementById('chipSaldo');
+  if (!chip) return;
+
+  let valor;
+  let formato;
+  let etiqueta;
+  let detalle;
+  let fraccion = null; // 0..1 de la cuota que queda (solo plan)
+  let bajo = false;
+  let vacio = false;
+
+  if (!esClienteAdmin && misPlan?.aplica) {
+    valor = misPlan.contactosQueEntran.MARKETING;
+    const total = misPlan.plan.mensajes_mes;
+    formato = (n) => `${n.toLocaleString('es-CO')} ${n === 1 ? 'mensaje' : 'mensajes'}`;
+    etiqueta = 'disponibles';
+    detalle = `Plan ${misPlan.plan.nombre} · ${valor.toLocaleString('es-CO')} de ${total.toLocaleString('es-CO')} mensajes este mes`;
+    fraccion = total > 0 ? Math.max(0, Math.min(1, misPlan.mediosLibres / total)) : 0;
+    vacio = valor <= 0;
+    bajo = !vacio && fraccion < 0.15;
+  } else if (!esClienteAdmin && misCreditos?.aplica) {
+    valor = misCreditos.creditos;
+    formato = (n) => `$${n.toLocaleString('es-CO')}`;
+    etiqueta = 'saldo';
+    detalle = `Saldo disponible: $${valor.toLocaleString('es-CO')} COP`;
+    const costoBase = misCreditos.costos?.UTILITY?.TEXTO || misCreditos.costos?.MARKETING?.TEXTO || 0;
+    vacio = valor <= 0;
+    bajo = !vacio && costoBase > 0 && valor < costoBase * 10;
+  } else {
+    chip.classList.add('hidden');
+    chipSaldoUltimoValor = null;
+    return;
+  }
+
+  chip.classList.remove('hidden');
+  chip.classList.toggle('sin-barra', fraccion === null);
+  chip.classList.toggle('is-bajo', bajo);
+  chip.classList.toggle('is-vacio', vacio);
+  chip.title = detalle;
+  document.getElementById('chipSaldoLabel').textContent = etiqueta;
+  document.getElementById('chipSaldoBarra').firstElementChild.style.width = `${Math.round((fraccion ?? 0) * 100)}%`;
+
+  const elValor = document.getElementById('chipSaldoValor');
+  const anterior = chipSaldoUltimoValor ?? valor;
+  animarNumeroChip(elValor, anterior, valor, formato);
+  if (valor < anterior) {
+    chip.classList.remove('is-bajando');
+    void chip.offsetWidth; // reinicia la animación si baja varias veces seguidas
+    chip.classList.add('is-bajando');
+    setTimeout(() => chip.classList.remove('is-bajando'), 500);
+  }
+  chipSaldoUltimoValor = valor;
+}
+
+document.getElementById('chipSaldo')?.addEventListener('click', () => {
+  if (chipSaldoUltimoValor !== null && chipSaldoUltimoValor <= 0 && !misPlan?.aplica) {
+    window.open('/planes.html', '_blank', 'noopener');
+    return;
+  }
+  document.querySelector('.tab-btn[data-tab="plantillas"]')?.click();
+});
 
 async function refrescarEstadoCobro() {
   if (esClienteAdmin) return;
@@ -1774,6 +1869,7 @@ async function cargarMiPlan() {
   if (!data.aplica) {
     misPlan = null;
     document.getElementById('cardMiPlan').classList.add('hidden');
+    actualizarChipSaldo();
     return;
   }
   misPlan = data;
@@ -1799,6 +1895,7 @@ async function cargarMiPlan() {
     const mensaje = encodeURIComponent(`Hola, ya usé todos los mensajes de mi plan ${misPlan.plan.nombre} este mes — quiero restaurarlo/ampliarlo.`);
     btnRestaurar.href = `https://wa.me/${contactoWhatsappAdmin}?text=${mensaje}`;
   }
+  actualizarChipSaldo();
 }
 
 /** Mismo criterio que `tipoEncabezado` del server: null = texto plano. */
@@ -1859,6 +1956,10 @@ async function pollProgresoCampana(campanaId, total, box, btn, paramsCliente = '
     const procesados = c.enviados + c.fallidos;
 
     box.textContent = `Procesando: ${procesados} / ${total} (✓ ${c.enviados} enviados, ✕ ${c.fallidos} fallidos)`;
+
+    // El servidor descuenta mensaje a mensaje — refrescamos el saldo en cada
+    // tick para que el chip del header vaya bajando mientras se envía.
+    if (c.estado !== 'completada') refrescarEstadoCobro();
 
     if (c.estado === 'completada') {
       clearInterval(interval);

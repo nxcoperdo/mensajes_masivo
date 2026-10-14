@@ -149,6 +149,20 @@ export async function procesarCampana({
     }
   }
 
+  // Cómo se cobra esta campaña — se decide una sola vez, antes del loop.
+  // Se descuenta mensaje a mensaje (solo los que salen OK) para que el saldo
+  // baje en vivo en el header del cliente. Un envío paralelo de la misma
+  // cuenta podría dejar el saldo apenas por debajo de 0 en una carrera; no se
+  // corta la campaña a mitad porque ya se validó que alcanzaba antes de empezar.
+  let cobro = null; // { tipo: 'plan' | 'creditos', porMensaje }
+  if (categoriaPlantilla) {
+    const clienteCobro = db.prepare('SELECT plan_id FROM clientes WHERE id = ?').get(clienteId);
+    cobro = clienteTienePlanActivo(clienteCobro)
+      ? { tipo: 'plan', porMensaje: pesoMensaje(categoriaPlantilla) }
+      : { tipo: 'creditos', porMensaje: costoPorMensaje(categoriaPlantilla, encabezadoTipo) };
+  }
+  const motivoCobro = `Campaña "${template_nombre}" (${categoriaPlantilla})`;
+
   const delayMs = Number(process.env.ENVIO_DELAY_MS) || 250;
   const insertEnvio = db.prepare(`
     INSERT INTO envios (campana_id, contacto_id, telefono, nombre, estado, error, wa_message_id)
@@ -184,6 +198,14 @@ export async function procesarCampana({
       resultado.messageId || null
     );
 
+    if (cobro && resultado.ok && cobro.porMensaje > 0) {
+      if (cobro.tipo === 'plan') {
+        registrarConsumoPlan({ clienteId, medios: cobro.porMensaje, motivo: motivoCobro, campanaId, acumular: true });
+      } else {
+        registrarMovimientoCreditos({ clienteId, cantidad: -cobro.porMensaje, motivo: motivoCobro, campanaId, acumular: true });
+      }
+    }
+
     if (delayMs > 0) {
       await new Promise((r) => setTimeout(r, delayMs));
     }
@@ -191,33 +213,16 @@ export async function procesarCampana({
 
   db.prepare(`UPDATE campanas SET estado = 'completada' WHERE id = ?`).run(campanaId);
 
-  // Descuento real: solo lo que efectivamente salió OK (los fallidos no se
-  // cobran, mismo criterio que ya usa la facturación por tarifa/mensaje).
-  if (categoriaPlantilla) {
+  // El saldo ya se descontó mensaje a mensaje arriba (solo los que salieron
+  // OK; los fallidos no se cobran, mismo criterio que la facturación por
+  // tarifa/mensaje). Acá solo se deja el resumen en la campaña para el
+  // historial — sin volver a tocar el saldo.
+  if (cobro) {
     const exitosos = db.prepare(`SELECT COUNT(*) AS n FROM envios WHERE campana_id = ? AND estado = 'enviado'`).get(campanaId).n;
-    const cliente = db.prepare('SELECT plan_id FROM clientes WHERE id = ?').get(clienteId);
-
-    if (clienteTienePlanActivo(cliente)) {
-      const consumido = exitosos * pesoMensaje(categoriaPlantilla);
-      if (consumido > 0) {
-        registrarConsumoPlan({
-          clienteId,
-          medios: consumido,
-          motivo: `Campaña "${template_nombre}" (${categoriaPlantilla})`,
-          campanaId,
-        });
-      }
+    const consumido = exitosos * cobro.porMensaje;
+    if (cobro.tipo === 'plan') {
       db.prepare(`UPDATE campanas SET categoria_plantilla = ?, canal_cobro = 'plan', plan_medios_consumidos = ? WHERE id = ?`).run(categoriaPlantilla, consumido, campanaId);
     } else {
-      const consumido = exitosos * costoPorMensaje(categoriaPlantilla, encabezadoTipo);
-      if (consumido > 0) {
-        registrarMovimientoCreditos({
-          clienteId,
-          cantidad: -consumido,
-          motivo: `Campaña "${template_nombre}" (${categoriaPlantilla})`,
-          campanaId,
-        });
-      }
       db.prepare(`UPDATE campanas SET categoria_plantilla = ?, canal_cobro = 'creditos', creditos_consumidos = ? WHERE id = ?`).run(categoriaPlantilla, consumido, campanaId);
     }
   }

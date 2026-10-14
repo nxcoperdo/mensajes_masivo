@@ -282,6 +282,109 @@ select:focus-visible,
 .badge-muted { background: rgba(255, 255, 255, 0.16); color: #ffffff; }
 .badge-muted::before { background: rgba(255, 255, 255, 0.7); }
 
+/* ==================== CHIP DE SALDO (HEADER) ==================== */
+/* Mensajes disponibles del plan, o saldo en $ si usa créditos. Baja en vivo
+   mientras se envía una campaña (ver actualizarChipSaldo en app.js). */
+
+.saldo-chip {
+  --saldo-acento: #4ade80;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 14px 5px 6px;
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  font: inherit;
+  cursor: pointer;
+  overflow: hidden;
+  transition: background-color var(--transition-fast), border-color var(--transition-base), transform var(--transition-fast), box-shadow var(--transition-base);
+}
+.saldo-chip.hidden { display: none; }
+.saldo-chip:hover { background: rgba(255, 255, 255, 0.18); transform: translateY(-1px); }
+.saldo-chip:active { transform: scale(0.97); }
+.saldo-chip:focus-visible { outline: 2px solid #ffffff; outline-offset: 2px; }
+
+.saldo-chip-icono {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--saldo-acento);
+  color: #0b2a14;
+  flex-shrink: 0;
+  transition: background-color var(--transition-base);
+}
+.saldo-chip-icono svg { width: 15px; height: 15px; }
+
+.saldo-chip-texto {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.1;
+}
+.saldo-chip-valor {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.saldo-chip-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+/* Barra fina con lo que queda de la cuota (solo con plan). */
+.saldo-chip-barra {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.14);
+}
+.saldo-chip-barra i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--saldo-acento);
+  border-radius: 0 3px 3px 0;
+  transition: width 600ms cubic-bezier(0.22, 1, 0.36, 1), background-color var(--transition-base);
+}
+.saldo-chip.sin-barra .saldo-chip-barra { display: none; }
+
+.saldo-chip.is-bajo { --saldo-acento: #fbbf24; border-color: rgba(251, 191, 36, 0.55); }
+.saldo-chip.is-vacio {
+  --saldo-acento: #f87171;
+  border-color: rgba(248, 113, 113, 0.7);
+  animation: saldo-pulso 2s ease-in-out infinite;
+}
+.saldo-chip.is-vacio .saldo-chip-icono { color: #3b0a0a; }
+
+/* Tick cada vez que el número baja: destello + el valor se achica y vuelve. */
+.saldo-chip.is-bajando .saldo-chip-valor { animation: saldo-tick 450ms ease-out; }
+.saldo-chip.is-bajando { box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.16); }
+
+@keyframes saldo-tick {
+  0% { transform: translateY(-3px); opacity: 0.55; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+@keyframes saldo-pulso {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.5); }
+  50% { box-shadow: 0 0 0 6px rgba(248, 113, 113, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .saldo-chip, .saldo-chip-barra i { transition: none; }
+  .saldo-chip.is-vacio, .saldo-chip.is-bajando .saldo-chip-valor { animation: none; }
+}
+
 /* ==================== TABS ==================== */
 
 .tabs {
@@ -1531,6 +1634,8 @@ input[type='radio'] {
   .brand-text p { display: none; }
   .brand-divider { display: none; }
   .crt-mark img { height: 22px; }
+  .saldo-chip { padding-right: 11px; gap: 7px; }
+  .saldo-chip-label { display: none; }
 
   .chat-layout {
     grid-template-columns: 1fr;
