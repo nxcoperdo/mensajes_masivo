@@ -435,10 +435,64 @@ const ICONO_ELIMINAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColo
 const ICONO_VER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z" /><circle cx="12" cy="12" r="3" /></svg>';
 const ICONO_CONTACTOS_VACIO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /></svg>';
 
-/** Convierte lo que haya guardado (formato SQL 'YYYY-MM-DD HH:MM:SS' o ya con 'T') al formato que espera un input datetime-local. */
+/**
+ * Convierte lo guardado (UTC, formato SQL 'YYYY-MM-DD HH:MM:SS') a la hora
+ * LOCAL que espera un input datetime-local — la misma que muestra la tabla
+ * (`formatearFechaHora`), para que el campo editable y la columna no se
+ * contradigan.
+ */
 function aInputDatetimeLocal(valor) {
-  if (!valor) return '';
-  return String(valor).replace(' ', 'T').slice(0, 16);
+  const fecha = parsearFechaUtc(valor);
+  if (!fecha) return '';
+  return `${fecha.getFullYear()}-${dosDigitos(fecha.getMonth() + 1)}-${dosDigitos(fecha.getDate())}T${dosDigitos(fecha.getHours())}:${dosDigitos(fecha.getMinutes())}`;
+}
+
+/** Hasta `max` teléfonos separados por coma, y «y N más» si hay más. */
+function listaCorta(items, max = 5) {
+  if (items.length <= max) return items.join(', ');
+  return `${items.slice(0, max).join(', ')} y ${items.length - max} más`;
+}
+
+/**
+ * Texto de resultado de una importación de contactos, incluyendo qué pasó
+ * con la columna de fecha de envío (si el archivo la traía): cuántos quedan
+ * programados, y avisos de las fechas que no se entendieron o ya pasaron.
+ */
+function textoResumenImportacion(data) {
+  let texto = `Importados: ${data.importados} de ${data.total_filas} filas.`;
+  if (data.invalidos.length > 0) {
+    texto += `\nNúmeros inválidos (omitidos): ${data.invalidos.join(', ')}`;
+  }
+
+  const f = data.fechas;
+  if (f && (f.futuras > 0 || f.invalidas.length > 0 || f.pasadas.length > 0)) {
+    texto += `\nFecha de envío individual: ✓ ${f.futuras} con fecha programada · ${f.sin_fecha} sin fecha.`;
+    if (f.invalidas.length > 0) {
+      texto += `\n⚠ ${f.invalidas.length} con una fecha que no se entendió (se importaron sin fecha): ${listaCorta(f.invalidas.map((i) => `${i.telefono} → "${i.valor}"`), 3)}. Usa por ejemplo 25/10/2026 9:00.`;
+    }
+    if (f.pasadas.length > 0) {
+      texto += `\n⚠ ${f.pasadas.length} con una fecha que ya pasó: en "Fecha individual por contacto" se enviarían de inmediato (${listaCorta(f.pasadas.map((p) => p.telefono))}).`;
+    }
+  }
+  return texto;
+}
+
+/**
+ * Aviso para el cuadro de confirmación del modo "Fecha individual por
+ * contacto": cuántos de los contactos elegidos no tienen fecha propia (se
+ * omiten) o la tienen en el pasado (se mandan ya). Vacío si no hay nada que avisar.
+ */
+function avisoFechasIndividuales(contactosElegidos) {
+  const ahora = Date.now();
+  const sinFecha = contactosElegidos.filter((c) => !c.fecha_recordatorio).length;
+  const pasadas = contactosElegidos.filter((c) => {
+    const fecha = parsearFechaUtc(c.fecha_recordatorio);
+    return fecha && fecha.getTime() <= ahora;
+  }).length;
+  let aviso = '';
+  if (sinFecha > 0) aviso += `\n\n⚠ ${sinFecha} contacto(s) no tienen fecha de envío propia y se van a omitir.`;
+  if (pasadas > 0) aviso += `${sinFecha > 0 ? '\n' : '\n\n'}⚠ ${pasadas} contacto(s) tienen una fecha que ya pasó y se enviarán ahora mismo.`;
+  return aviso;
 }
 
 /**
@@ -827,11 +881,7 @@ document.getElementById('formImportar').addEventListener('submit', async (e) => 
     if (!res.ok) throw new Error(data.error || 'Error al importar');
 
     box.classList.add('ok');
-    let texto = `Importados: ${data.importados} de ${data.total_filas} filas.`;
-    if (data.invalidos.length > 0) {
-      texto += `\nNúmeros inválidos (omitidos): ${data.invalidos.join(', ')}`;
-    }
-    box.textContent = texto;
+    box.textContent = textoResumenImportacion(data);
     document.getElementById('formImportar').reset();
     document.getElementById('inputArchivoNombre').textContent = 'Ningún archivo seleccionado';
     (data.contacto_ids || []).forEach((id) => seleccionados.add(id));
@@ -1363,11 +1413,7 @@ document.getElementById('formImportarEmpresa').addEventListener('submit', async 
     if (!res.ok) throw new Error(data.error || 'Error al importar');
 
     box.classList.add('ok');
-    let texto = `Importados: ${data.importados} de ${data.total_filas} filas.`;
-    if (data.invalidos.length > 0) {
-      texto += `\nNúmeros inválidos (omitidos): ${data.invalidos.join(', ')}`;
-    }
-    box.textContent = texto;
+    box.textContent = textoResumenImportacion(data);
     document.getElementById('formImportarEmpresa').reset();
     (data.contacto_ids || []).forEach((id) => empresaSeleccionados.add(id));
     cargarContactosEmpresa();
@@ -1421,7 +1467,7 @@ document.getElementById('btnEnviarCampanaEmpresa').addEventListener('click', asy
     return;
   }
   const confirmacion = individual
-    ? `¿Programar "${template_nombre}" para cada uno de los ${contacto_ids.length} contactos, según su propia fecha de recordatorio?`
+    ? `¿Programar "${template_nombre}" para cada uno de los ${contacto_ids.length} contactos, según su propia fecha de recordatorio?${avisoFechasIndividuales(empresaContactos.filter((c) => empresaSeleccionados.has(c.id)))}`
     : fechaProgramada
       ? `¿Programar "${template_nombre}" para ${contacto_ids.length} contactos el ${new Date(fechaProgramada).toLocaleString('es-CO')}?`
       : `¿Enviar "${template_nombre}" a ${contacto_ids.length} contactos ahora mismo?`;
@@ -1591,7 +1637,7 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
     return;
   }
   if (contacto_ids.length === 0) {
-    alert('No hay contactos seleccionados (elegilos en la pestaña "Contactos")');
+    alert('No hay contactos seleccionados (elígelos en la pestaña "Contactos")');
     return;
   }
   const flowBoton = document.getElementById('checkFlowBoton').checked;
@@ -1618,7 +1664,7 @@ document.getElementById('btnEnviarCampana').addEventListener('click', async () =
   }
 
   const confirmacion = individual
-    ? `¿Programar "${template_nombre}" para cada uno de los ${contacto_ids.length} contactos seleccionados, según su propia fecha de recordatorio?`
+    ? `¿Programar "${template_nombre}" para cada uno de los ${contacto_ids.length} contactos seleccionados, según su propia fecha de recordatorio?${avisoFechasIndividuales(contactos.filter((c) => seleccionados.has(c.id)))}`
     : fechaProgramada
       ? `¿Programar "${template_nombre}" para ${contacto_ids.length} contactos el ${new Date(fechaProgramada).toLocaleString('es-CO')}?`
       : `¿Enviar "${template_nombre}" a ${contacto_ids.length} contactos ahora mismo?`;
@@ -3505,14 +3551,15 @@ document.getElementById('templateNombre').addEventListener('change', (e) => {
 
 /** CSV de ejemplo con las columnas que entiende la importación (ver /api/contactos/importar). */
 function descargarCsvEjemplo() {
-  const enDias = (n) => {
+  // Mismo formato día/mes/año hora que entiende la importación (ver fechas.js).
+  const enDias = (n, hora) => {
     const d = new Date(Date.now() + n * 86400000);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} 09:00`;
+    return `${dosDigitos(d.getDate())}/${dosDigitos(d.getMonth() + 1)}/${d.getFullYear()} ${hora}`;
   };
   const filas = [
     'telefono,nombre,fecha_cita,fecha_envio',
-    `3001234567,Ana Gómez,Martes 10:00 am,${enDias(7)}`,
-    `3109876543,Carlos Pérez,Miércoles 3:00 pm,${enDias(8)}`,
+    `3001234567,Ana Gómez,Martes 10:00 am,${enDias(7, '9:00')}`,
+    `3109876543,Carlos Pérez,Miércoles 3:00 pm,${enDias(8, '3:30 p. m.')}`,
     '3205551234,Laura Díaz,,',
   ];
   const blob = new Blob(['﻿' + filas.join('\r\n')], { type: 'text/csv;charset=utf-8' });

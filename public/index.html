@@ -296,7 +296,9 @@
           <p class="muted">Columnas esperadas: <code>telefono</code> y <code>nombre</code> (también
             <code>phone</code>/<code>numero</code>/<code>name</code>). Cualquier otra columna (ej:
             <code>fecha_cita</code>, <code>hora</code>, <code>servicio</code>) queda disponible como variable de
-            plantilla. Una columna <code>fecha_envio</code> programa el recordatorio individual de ese contacto.</p>
+            plantilla. Una columna <code>fecha_envio</code> con día y hora (ej: <code>25/10/2026 9:00</code>, hora de
+            Colombia, orden día/mes/año; solo el día = 9:00 a. m.) programa el recordatorio individual de ese
+            contacto. Al importar verás cuántas quedaron programadas y cuáles revisar.</p>
           <form id="formImportarEmpresa">
             <label for="inputArchivoEmpresa" class="sr-only">Archivo de contactos</label>
             <input type="file" id="inputArchivoEmpresa" accept=".csv,.xlsx,.xls" required />
@@ -439,7 +441,8 @@
       <div class="card">
         <h2>Importar contactos (CSV o Excel)</h2>
         <p class="muted">Columnas esperadas: <code>telefono</code> y <code>nombre</code> (puedes usar <code>phone</code>/<code>numero</code>/<code>name</code> también). El teléfono se normaliza solo (agrega el 57 de Colombia si falta). Formatos aceptados: <code>.csv</code>, <code>.xlsx</code>, <code>.xls</code>.</p>
-        <p class="muted">Cualquier otra columna (ej: <code>fecha_cita</code>, <code>hora</code>, <code>servicio</code>) queda disponible como variable de plantilla al armar la campaña. Una columna <code>fecha_envio</code> programa el recordatorio individual de ese contacto (pestaña "Nueva campaña", opción "Fecha individual por contacto").</p>
+        <p class="muted">Cualquier otra columna (ej: <code>fecha_cita</code>, <code>hora</code>, <code>servicio</code>) queda disponible como variable de plantilla al armar la campaña.</p>
+        <p class="muted"><strong>Fecha de envío por contacto:</strong> agrega una columna <code>fecha_envio</code> con el día y la hora a la que quieres mandarle el mensaje a ESE contacto (ej: <code>25/10/2026 9:00</code> o <code>25/10/2026 3:30 p. m.</code>; en Excel puedes usar una fecha normal). Va en hora de Colombia y en orden día/mes/año; si solo pones el día, se envía a las 9:00 a. m. Después, en "Nueva campaña", activa "Fecha individual por contacto" y listo — sin tener que ponerlas una por una. Al importar te mostramos cuántas quedaron programadas y cuáles revisar.</p>
         <form id="formImportar">
           <div class="file-picker">
             <label for="inputArchivo" class="file-picker-label">Seleccionar archivo</label>

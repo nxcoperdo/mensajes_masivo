@@ -10,6 +10,7 @@ import crypto, { timingSafeEqual } from 'crypto';
 import { db } from './db.js';
 import { hashPassword, verifyPassword } from './auth.js';
 import { parseCsv } from './csv.js';
+import { parsearFechaEnvio, analizarFechaEnvio, esColumnaFechaEnvio } from './fechas.js';
 import { parseExcel } from './excel.js';
 import { sendTextMessage, subirMedia, normalizePhone, isWhatsAppConfigured } from './whatsapp.js';
 import { normalizarVideoWhatsApp, MAX_VIDEO_BYTES } from './video.js';
@@ -591,16 +592,25 @@ app.patch('/api/contactos/:id', (req, res) => {
 const COLUMNAS_RECONOCIDAS_CONTACTO = new Set([
   'telefono', 'phone', 'numero', 'celular',
   'nombre', 'name',
-  'fecha_envio', 'fecha_recordatorio',
 ]);
 
+// La fecha de envío individual acepta varias cabeceras ("fecha_envio",
+// "Fecha de envío", "fecha_recordatorio"…) — ver esColumnaFechaEnvio.
 function variablesDeFila(row) {
   const variables = {};
   for (const [clave, valor] of Object.entries(row)) {
-    if (COLUMNAS_RECONOCIDAS_CONTACTO.has(clave)) continue;
+    if (COLUMNAS_RECONOCIDAS_CONTACTO.has(clave) || esColumnaFechaEnvio(clave)) continue;
     if (valor) variables[clave] = valor;
   }
   return variables;
+}
+
+/** Valor de la columna de fecha de envío de una fila, con la cabecera que haya usado el archivo. */
+function fechaEnvioDeFila(row) {
+  for (const [clave, valor] of Object.entries(row)) {
+    if (esColumnaFechaEnvio(clave) && valor) return valor;
+  }
+  return '';
 }
 
 /**
@@ -643,6 +653,11 @@ app.post('/api/contactos/importar', (req, res) => {
     let importados = 0;
     const invalidos = [];
     const telefonosImportados = [];
+    // Resumen de la columna de fecha de envío — se devuelve al frontend para
+    // que el usuario vea qué contactos quedaron programados y cuáles no,
+    // en vez de enterarse recién cuando una campaña individual los omite.
+    const ahoraSql = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    const resumenFechas = { futuras: 0, sin_fecha: 0, invalidas: [], pasadas: [] };
     // `node:sqlite` no trae un helper `.transaction()` como better-sqlite3
     // — envolvemos a mano con BEGIN/COMMIT (y ROLLBACK si algo explota).
     db.exec('BEGIN');
@@ -650,12 +665,22 @@ app.post('/api/contactos/importar', (req, res) => {
       for (const row of filas) {
         const telefonoRaw = row.telefono || row.phone || row.numero || row.celular || '';
         const nombreRaw = row.nombre || row.name || '';
-        const fechaRecordatorioRaw = row.fecha_envio || row.fecha_recordatorio || '';
-        const fechaRecordatorioNormalizada = fechaRecordatorioRaw ? normalizarFechaProgramada(fechaRecordatorioRaw) : null;
+        const fechaRecordatorioRaw = fechaEnvioDeFila(row);
+        const analisisFecha = analizarFechaEnvio(fechaRecordatorioRaw);
+        const fechaRecordatorioNormalizada = analisisFecha.fecha;
         const normalizado = normalizePhone(telefonoRaw);
         if (!normalizado) {
           if (telefonoRaw) invalidos.push(telefonoRaw);
           continue;
+        }
+        if (analisisFecha.estado === 'vacia') {
+          resumenFechas.sin_fecha++;
+        } else if (analisisFecha.estado === 'invalida') {
+          resumenFechas.invalidas.push({ telefono: normalizado, valor: String(fechaRecordatorioRaw) });
+        } else if (fechaRecordatorioNormalizada > ahoraSql) {
+          resumenFechas.futuras++;
+        } else {
+          resumenFechas.pasadas.push({ telefono: normalizado, fecha: fechaRecordatorioNormalizada });
         }
         const variables = variablesDeFila(row);
         upsert.run(
@@ -693,7 +718,7 @@ app.post('/api/contactos/importar', (req, res) => {
       listaId = resultLista.lastInsertRowid;
     }
 
-    res.json({ importados, invalidos, total_filas: filas.length, contacto_ids: contactoIds, lista_id: listaId });
+    res.json({ importados, invalidos, total_filas: filas.length, contacto_ids: contactoIds, lista_id: listaId, fechas: resumenFechas });
   });
 });
 
@@ -805,16 +830,14 @@ app.get('/api/campanas/:id/envios', (req, res) => {
 });
 
 /**
- * Convierte lo que venga de un input `datetime-local` (o una fecha suelta
- * tipo `2026-09-10` de un CSV) a un datetime UTC comparable con
+ * Convierte lo que venga de un input `datetime-local` (o una fecha de un
+ * CSV/Excel, ej: `25/10/2026 9:00`) a un datetime UTC comparable con
  * `datetime('now')` de SQLite (mismo formato que ya usa `pagada_en` en
- * facturas). Devuelve `null` si no se pudo interpretar como fecha.
+ * facturas). Sin zona explícita se interpreta en hora de Colombia. Devuelve
+ * `null` si no se pudo interpretar como fecha — ver `fechas.js`.
  */
 function normalizarFechaProgramada(valor) {
-  if (!valor) return null;
-  const fecha = new Date(valor);
-  if (Number.isNaN(fecha.getTime())) return null;
-  return fecha.toISOString().slice(0, 19).replace('T', ' ');
+  return parsearFechaEnvio(valor);
 }
 
 function esFechaFutura(fechaSql) {
