@@ -5,6 +5,44 @@ import { costoPorMensaje, registrarMovimientoCreditos } from './creditos.js';
 import { clienteTienePlanActivo, pesoMensaje, cuotaRestante, registrarConsumoPlan } from './planes.js';
 
 /**
+ * Devuelve al cliente lo que se le cobró por un envío que Meta aceptó pero
+ * después reportó como fallido (webhook). Idempotente: el UPDATE condicionado
+ * a `reembolsado = 0` garantiza que, aunque el webhook repita el evento, se
+ * devuelve una sola vez. Si la devolución falla se deshace la marca.
+ *
+ * No hace nada si el envío no tiene `wa_message_id` (nunca se cobró) o si la
+ * campaña no tiene canal de cobro (admin / empresa gestionada).
+ */
+export function reembolsarEnvio(envioId) {
+  const envio = db.prepare('SELECT id, campana_id, wa_message_id FROM envios WHERE id = ?').get(envioId);
+  if (!envio || !envio.wa_message_id) return false;
+  const campana = db
+    .prepare('SELECT cliente_id, canal_cobro, categoria_plantilla, encabezado_tipo, template_nombre FROM campanas WHERE id = ?')
+    .get(envio.campana_id);
+  if (!campana?.canal_cobro || !campana.categoria_plantilla) return false;
+
+  const marcado = db.prepare('UPDATE envios SET reembolsado = 1 WHERE id = ? AND reembolsado = 0').run(envioId);
+  if (!marcado.changes) return false;
+
+  const motivo = `Reembolso: mensaje fallido de la campaña "${campana.template_nombre}"`;
+  try {
+    if (campana.canal_cobro === 'plan') {
+      const medios = pesoMensaje(campana.categoria_plantilla);
+      registrarConsumoPlan({ clienteId: campana.cliente_id, medios: -medios, motivo, campanaId: envio.campana_id, acumular: true });
+      db.prepare('UPDATE campanas SET plan_medios_consumidos = MAX(0, COALESCE(plan_medios_consumidos, 0) - ?) WHERE id = ?').run(medios, envio.campana_id);
+    } else {
+      const monto = costoPorMensaje(campana.categoria_plantilla, campana.encabezado_tipo);
+      registrarMovimientoCreditos({ clienteId: campana.cliente_id, cantidad: monto, motivo, campanaId: envio.campana_id, acumular: true });
+      db.prepare('UPDATE campanas SET creditos_consumidos = MAX(0, COALESCE(creditos_consumidos, 0) - ?) WHERE id = ?').run(monto, envio.campana_id);
+    }
+  } catch (err) {
+    db.prepare('UPDATE envios SET reembolsado = 0 WHERE id = ?').run(envioId);
+    throw err;
+  }
+  return true;
+}
+
+/**
  * Resuelve los valores finales de los parámetros de plantilla para un
  * contacto puntual. Se ejecuta acá (al momento de mandar), no al crear
  * la campaña, para que una campaña programada siempre use el dato más
@@ -218,6 +256,15 @@ export async function procesarCampana({
       : { tipo: 'creditos', porMensaje: costoPorMensaje(categoriaPlantilla, encabezadoTipo) };
   }
   const motivoCobro = `Campaña "${template_nombre}" (${categoriaPlantilla})`;
+  // El canal se deja grabado desde el inicio: el webhook puede marcar un envío
+  // como fallido (y reembolsarlo) antes de que termine el loop.
+  if (cobro) {
+    db.prepare(`UPDATE campanas SET categoria_plantilla = ?, canal_cobro = ? WHERE id = ?`).run(
+      categoriaPlantilla,
+      cobro.tipo,
+      campanaId
+    );
+  }
 
   const delayMs = Number(process.env.ENVIO_DELAY_MS) || 250;
   const insertEnvio = db.prepare(`
@@ -281,12 +328,15 @@ export async function procesarCampana({
 
   db.prepare(`UPDATE campanas SET estado = 'completada' WHERE id = ?`).run(campanaId);
 
-  // El saldo ya se descontó mensaje a mensaje arriba (solo los que salieron
-  // OK; los fallidos no se cobran, mismo criterio que la facturación por
-  // tarifa/mensaje). Acá solo se deja el resumen en la campaña para el
-  // historial — sin volver a tocar el saldo.
+  // El saldo ya se descontó mensaje a mensaje arriba (solo los que Meta
+  // aceptó; los que fallan al enviar no se cobran). Los que Meta acepta y
+  // luego reporta como fallidos por webhook se devuelven en `reembolsarEnvio`.
+  // Acá solo se deja el resumen en la campaña para el historial — sin volver
+  // a tocar el saldo.
   if (cobro) {
-    const exitosos = db.prepare(`SELECT COUNT(*) AS n FROM envios WHERE campana_id = ? AND estado = 'enviado'`).get(campanaId).n;
+    const exitosos = db
+      .prepare(`SELECT COUNT(*) AS n FROM envios WHERE campana_id = ? AND wa_message_id IS NOT NULL AND reembolsado = 0`)
+      .get(campanaId).n;
     const consumido = exitosos * cobro.porMensaje;
     if (cobro.tipo === 'plan') {
       db.prepare(`UPDATE campanas SET categoria_plantilla = ?, canal_cobro = 'plan', plan_medios_consumidos = ? WHERE id = ?`).run(categoriaPlantilla, consumido, campanaId);

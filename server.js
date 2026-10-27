@@ -14,7 +14,7 @@ import { parsearFechaEnvio, analizarFechaEnvio, esColumnaFechaEnvio } from './fe
 import { parseExcel } from './excel.js';
 import { sendTextMessage, subirMedia, normalizePhone, isWhatsAppConfigured } from './whatsapp.js';
 import { normalizarVideoWhatsApp, MAX_VIDEO_BYTES } from './video.js';
-import { procesarCampana, validarParametrosDef, particionarPorParametros } from './campanas.js';
+import { procesarCampana, validarParametrosDef, particionarPorParametros, reembolsarEnvio } from './campanas.js';
 import { iniciarScheduler } from './scheduler.js';
 import { validarContenidoPlantilla, validarBotones } from './plantillas.js';
 import {
@@ -2366,12 +2366,20 @@ function guardarRespuestaFlow(clienteId, telefono, msg) {
 }
 
 function aplicarEstadoSiCorresponde(tabla, waMessageId, nuevoEstado, error) {
-  const fila = db.prepare(`SELECT estado FROM ${tabla} WHERE wa_message_id = ?`).get(waMessageId);
+  const fila = db.prepare(`SELECT id, estado FROM ${tabla} WHERE wa_message_id = ?`).get(waMessageId);
   if (!fila) return;
   const rankActual = ESTADO_RANK[fila.estado] || 0;
   const rankNuevo = ESTADO_RANK[nuevoEstado] || 0;
   if (nuevoEstado === 'fallido' || rankNuevo > rankActual) {
     db.prepare(`UPDATE ${tabla} SET estado = ?, error = ? WHERE wa_message_id = ?`).run(nuevoEstado, error, waMessageId);
+  }
+  // Meta aceptó el mensaje (y se cobró) pero después falló: se devuelve el cobro.
+  if (tabla === 'envios' && nuevoEstado === 'fallido') {
+    try {
+      reembolsarEnvio(fila.id);
+    } catch (err) {
+      console.error(`[webhook] no se pudo reembolsar el envío ${fila.id}:`, err);
+    }
   }
 }
 

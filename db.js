@@ -560,6 +560,11 @@ migrarAUniqueCompuesto(
 
 repararReferenciaEnviosContactos();
 
+// 1 = ya se le devolvió al cliente lo cobrado por este envío (el webhook lo
+// marcó fallido después de que Meta lo aceptó). Evita reembolsar dos veces.
+// Va después de la reparación de arriba porque esa reconstruye `envios`.
+agregarColumnaSiFalta('envios', 'reembolsado INTEGER NOT NULL DEFAULT 0');
+
 /**
  * Antes de este cambio, `contactos`/`campanas`/`envios`/`mensajes`/
  * `leads_prospectos` eran globales (un solo tenant: Code Repair Tech,
