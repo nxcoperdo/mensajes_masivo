@@ -201,13 +201,15 @@ async function ejecutarHerramienta(clienteId, cfg, tel, nombre, input) {
 
 // Respuestas automáticas de WhatsApp Business ("Gracias por comunicarte…", "En este momento no podemos responder…").
 // Un bot no debe conversar con otro bot: se registran aparte y el agente no contesta.
-const AUTO_FUERTE = /mensaje autom[aá]tico|respuesta autom[aá]tica|fuera del horario|horario (laboral|de atenci[oó]n)|en este momento (no|nos)|atendemos de|lo antes posible|tan pronto como|guard(a|ar|as|es) (nuestro|el) contacto|te atender[eé]mos|en (un )?(momento|minuto)s? te (atend|respond)|por favor (espera|aguarda)/i;
+const AUTO_FUERTE = /mensaje autom[aá]tico|respuesta autom[aá]tica|fuera del horario|horario (laboral|de atenci[oó]n)|en este momento (no|nos)|atendemos de|lo antes posible|tan pronto como|guard(a|ar|as|es) (nuestro|el) contacto|te atender[eé]mos|en (un )?(momento|minuto)s? te (atend|respond)|por favor (espera|aguarda)|no respondemos|solo (recibimos|atendemos)|despu[eé]s de las d|est[aá] cerrado|no estoy disponible|ahora mismo no|d[eé]jame (por favor )?(tu|los|el)|d[eé]janos (tu|tus|los|un)|d[eé]janos (tu )?mensaje|urgencias?|cat[aá]logo|ub[ií]canos|cont[aá]ctanos|nuestros? (servicios|horarios?)|llamar al|dir(ecci[oó]n)?:|es un honor atenderte/i;
 const AUTO_SUAVE = /gracias por (comunicarte|contactarnos|escribir|tu mensaje|tu inter[eé]s|ponerte en contacto|elegirnos)|bienvenid[oa]|c[oó]mo podemos ayudarte|d[eé]janos saber|haznos saber|responder[eé]mos|no brindamos servicio/i;
 
 /** segundos = tiempo desde nuestro envío; los saludos "suaves" solo cuentan si llegan casi al instante. */
 export function esRespuestaAutomatica(texto, segundos = Infinity) {
   const t = String(texto || '');
   if (t.length < 25) return false;
+  // Demasiado largo y demasiado rápido tras nuestro envío: es una respuesta automática, no una persona escribiendo.
+  if (segundos < 120 && t.length > 100) return true;
   if (AUTO_FUERTE.test(t)) return true;
   return AUTO_SUAVE.test(t) && segundos < 300;
 }
@@ -228,11 +230,12 @@ async function manejarEntrante(clienteId, cfg, tel, texto, nombrePerfil) {
     return avisar(clienteId, cfg, `💬 ${c.nombre || tel} (${c.negocio || 'sin negocio'}):\n${texto}\nhttps://wa.me/${tel}`);
   }
   if (c.estado === 'baja') return;
+  if (c.estado === 'perdido' && texto.length < 40) return; // ya dijo que no: un "gracias" o un emoji no se contesta
 
   // Primer toque de "Sí, cuéntame": presentación fija y corta con el enlace; luego Claude sigue desarrollando la venta con ese mensaje ya en el historial.
   if ((c.estado === 'contactado' || c.estado === 'nuevo') && /^\s*s[ií]\s*,?\s*cu[eé]ntame/i.test(texto)) {
     const intro = [
-      `¡Genial${c.nombre ? `, ${String(c.nombre).split(' ')[0]}` : ''}! 👋 Soy el asistente de *Code Repair Tech*, de parte de Nicolás Perdomo.`,
+      `¡Genial${primerNombre(c) ? `, ${primerNombre(c)}` : ''}! 👋 Soy el asistente de *Code Repair Tech*, de parte de Nicolás Perdomo.`,
       cfg.crt_url ? `Aquí puedes ver lo que hacemos: ${cfg.crt_url}` : '',
       'Cuéntame, ¿qué tipo de negocio tienes y qué te gustaría mejorar?',
     ].filter(Boolean).join('\n\n');
@@ -247,10 +250,11 @@ async function manejarEntrante(clienteId, cfg, tel, texto, nombrePerfil) {
 /** Genera y envía la respuesta de Claude con el historial actual (sin agregar mensaje nuevo). */
 // Señales claras de compra / necesidad de cierre humano. Si aparecen y Claude no pasó el cliente
 // a Nicolás por su cuenta, el sistema lo pasa igual (red de seguridad determinista).
-const SENAL_CIERRE = /cuota|abono|financ|a plazos|cotizaci|c[oó]mo (pago|pagar|se paga)|formas? de pago|quiero (empezar|contratar|comprar|el servicio|la p[aá]gina|el sistema)|me (gustar[ií]a|interesa)\s+(empezar|contratar)|empecemos|arranquemos|(ll[aá]ma(me|r|nos)|llamen|llamada)|reuni[oó]n|hablar con (nicol[aá]s|una persona|alguien|un asesor)|no (cuento|tengo) (con )?(todo|el dinero|la plata)|no puedo pagar/i;
+const SENAL_CIERRE = /cuota|abono|financ|a plazos|cotizaci|c[oó]mo (pago|pagar|se paga)|formas? de pago|quiero (empezar|contratar|comprar|el servicio|la p[aá]gina|el sistema)|me (gustar[ií]a|interesa)\s+(empezar|contratar)|empecemos|arranquemos|ll[aá]ma(me|nos)|ll[aá]men(me|nos)?|me (pueden|puedes|podr[ií]an?) llamar|(quiero|necesito|agendar|programar) (una )?llamada|reuni[oó]n|hablar con (nicol[aá]s|una persona|alguien|un asesor)|no (cuento|tengo) (con )?(todo|el dinero|la plata)|no puedo pagar/i;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const primerNombre = (c) => (c?.nombre ? String(c.nombre).split(' ')[0] : '');
+// En los contactos de prospección `nombre` es el nombre del NEGOCIO: no se saluda con su primera palabra.
+const primerNombre = (c) => (c?.nombre && !c?.nicho ? String(c.nombre).split(' ')[0] : '');
 const ultimoMensajeCliente = (clienteId, tel) =>
   db.prepare("SELECT texto FROM agente_chat WHERE cliente_id = ? AND telefono = ? AND rol = 'user' ORDER BY id DESC LIMIT 1").get(clienteId, tel)?.texto || '';
 
@@ -305,7 +309,7 @@ async function responderConClaude(clienteId, cfg, tel) {
   const nombre = primerNombre(c);
 
   // Red de seguridad: señal de cierre y Claude no pasó el cliente.
-  if (!yaPasado && SENAL_CIERRE.test(textoCliente)) {
+  if (!yaPasado && textoCliente.length < 300 && !esRespuestaAutomatica(textoCliente, 0) && SENAL_CIERRE.test(textoCliente)) {
     await pasarPorRegla(clienteId, cfg, tel, `Señal de compra detectada: "${textoCliente.slice(0, 150)}"`);
     await enviarYRegistrar(clienteId, cfg, tel,
       `Perfecto${nombre ? `, ${nombre}` : ''} 🙌 Nicolás te escribe o te llama en breve desde su WhatsApp personal para acordar los detalles y arrancar (si lo necesitas, se puede pagar en cuotas).`);
@@ -452,6 +456,7 @@ function enCola(clave, fn) {
 export function alRecibirMensaje({ clienteIds, phoneNumberId, msg, texto, nombrePerfil }) {
   try {
     if (!texto || !msg?.from) return;
+    if (msg.type === 'reaction' || msg.type === 'sticker') return; // un 👍 no merece respuesta
     for (const clienteId of clienteIds) {
       const cliente = db.prepare('SELECT id, email FROM clientes WHERE id = ?').get(clienteId);
       if (!esDuenoAgente(cliente)) continue;

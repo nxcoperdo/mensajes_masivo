@@ -125,6 +125,19 @@ tar cf - agente public/agente.js public/index.html server.js leads.js | ssh root
 - Plantilla de seguimiento propuesta (`seguimiento_crt`, Marketing, es_CO, botones "Sí, cuéntame" / "No, gracias"): saludo con `{{1}}` = nombre del negocio,
   "Somos Code Repair Tech, de Neiva… ¿Cómo manejan eso hoy? Si quieres, te mostramos un ejemplo sin compromiso."
 
+### Más campañas (22-nov-2026)
+- **Neiva, lote 2:** 64 negocios (spa, hoteles, inmobiliarias, talleres de motos, veterinarias), marcados `cmaps-neiva-2`, enviados el 22-nov 10:07 a. m. (64/64 aceptados).
+- **Bogotá:** 50 negocios (odontólogos, peluquerías, veterinarias, spa, ferreterías), marcados `cmaps-bogota`, `agente_programados` #4: lunes 23-nov 15:00 UTC (10:00 a. m. Colombia), `nicho cmaps-bogota`, ciudad `Bogot`.
+- **Plantillas globales** (sin ciudad) para usar fuera de Neiva: `presentacion_global` y `seguimiento_global` (Marketing, es_CO, botones "Sí, cuéntame" / "No, gracias").
+  Hasta que Meta las apruebe, `agente_config.plantilla` sigue siendo `presentacion_crt` (menciona el Huila); cambiarla a `presentacion_global` antes del envío a Bogotá.
+- Total de presentaciones del 22-nov: 109 (45 + 64). Vigilar la calidad del número en WhatsApp Manager.
+
+### Correcciones posteriores a las respuestas automáticas
+- El filtro de cierre (`SENAL_CIERRE`) ya no se activa con "llamadas" ni con mensajes largos/automáticos; el detector de respuestas automáticas
+  suma patrones (horarios, "no respondemos", catálogos…) y trata como automático un mensaje de >100 caracteres que llega <2 min tras el envío.
+- No se saluda con la primera palabra del nombre del negocio, se ignoran reacciones/stickers y a quien ya dijo "No, gracias" no se le responde un "gracias".
+- El prompt ya no dice "somos de la región": atendemos negocios de toda Colombia.
+
 ## 7. Prospección sin Google Places
 
 Google Places quedó suspendido. Alternativa usada: abrir Google Maps en el navegador y leer cada ficha

@@ -39,7 +39,7 @@ Presentar bien a Code Repair Tech, entender qué necesita el cliente, resolver s
 # Servicios y precios de referencia (siempre "desde", nunca precio cerrado)
 ${PRECIOS.map(([s, p]) => `- ${s}: ${p}`).join('\n')}
 ${INCLUYE_LANDING}
-Somos más económicos que las agencias grandes porque trabajamos directo, sin intermediarios, y somos de la región.
+Somos más económicos que las agencias grandes porque trabajamos directo, sin intermediarios. Atendemos negocios de toda Colombia (no presumas de "ser de la región" con clientes de otras ciudades; menciona el Huila solo si el cliente es de allí).
 ${iva}
 Formas de pago: Nicolás las acuerda en la propuesta (normalmente anticipo y saldo a la entrega).
 Tiempos: una landing suele estar en pocos días; webs y software dependen del alcance y Nicolás los confirma.
