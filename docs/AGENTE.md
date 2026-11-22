@@ -66,6 +66,9 @@ Los mensajes también se registran en `mensajes` para verlos en la pestaña Webh
   Si solo tiene redes, sí ofrece web/landing. Se guarda `sitio_web` al enviar la presentación.
 - **Nunca en silencio:** reintentos (3), mensaje de respaldo si todo falla + alerta ⚠️, y un **vigilante** cada minuto
   que reintenta clientes cuyo último mensaje lleva >2 min sin respuesta (20 h de ventana).
+- **Respuestas automáticas de WhatsApp Business** ("Gracias por comunicarte…", "En este momento no podemos responder…"):
+  `esRespuestaAutomatica()` las detecta, se guardan con `rol = 'auto'` y el agente NO contesta (un bot no habla con otro bot).
+  El contacto sigue en `contactado`. Si después escribe una persona real, se atiende normal.
 - **Notas de voz / archivos:** pide que lo escriban (no hay transcripción).
 - **Modo humano (💬 en Telegram):** si el chat está en modo humano el agente no contesta y solo reenvía a Telegram.
   Se activa con "Tomar"/"Cerrado"/"Perdido" del panel o los comandos `#`.
@@ -113,8 +116,14 @@ tar cf - agente public/agente.js public/index.html server.js leads.js | ssh root
 - Lista armada desde Google Maps (6 rubros: peluquerías, restaurantes, odontólogos, gimnasios, tiendas de ropa, ferreterías),
   solo celulares, sin cadenas; 33 sin web, 10 solo redes, 2 con web. Marcados con rubro `cmaps-neiva <rubro>`.
 - `agente_programados` #1: tipo `primer`, 2026-11-22 14:00 UTC (9:00 a. m. Colombia), 45, nicho `cmaps-neiva`, ciudad `Neiva`.
-- `agente_programados` #2: tipo `reenvio`, 2026-11-23 14:00 UTC (9:00 a. m.), reenvía UNA vez la presentación a quienes
-  siguen en estado `contactado`. Al terminar cada uno llega un resumen por Telegram.
+- `agente_programados` #2: tipo `reenvio`, 2026-11-23 14:00 UTC (9:00 a. m.), envía UNA vez un **seguimiento** a quienes
+  siguen en estado `contactado`. Usa una plantilla DISTINTA (`agente_config.plantilla_reenvio`, p. ej. `seguimiento_crt`);
+  si no está configurada no envía nada y avisa por Telegram. Excluye números con envío `fallido` y prioriza `leido` > `entregado` > `enviado`.
+  Al terminar cada envío llega un resumen por Telegram.
+- Resultado del 22-nov (primer envío 9:00 a. m., domingo): 45 enviados; a los ~45 min: 29 entregados, 7-10 leídos, 5 fallidos y 13 números
+  devolvieron respuestas automáticas; ninguna persona respondió todavía (muchos negocios abren el lunes).
+- Plantilla de seguimiento propuesta (`seguimiento_crt`, Marketing, es_CO, botones "Sí, cuéntame" / "No, gracias"): saludo con `{{1}}` = nombre del negocio,
+  "Somos Code Repair Tech, de Neiva… ¿Cómo manejan eso hoy? Si quieres, te mostramos un ejemplo sin compromiso."
 
 ## 7. Prospección sin Google Places
 
@@ -133,7 +142,7 @@ servidor caído/reiniciado (🚨/⚠️/ℹ️/✅), fin de envío programado (�
 
 - Rotar credenciales que se pegaron en el chat durante el desarrollo: clave de Anthropic, token del bot de Telegram y
   contraseña SSH de root (idealmente pasar a llave SSH y deshabilitar contraseña).
-- Corregir el texto del botón en Meta ("Sí, cuéntame").
+- Corregir el texto del botón en Meta ("Sí, cuéntame") y crear/aprobar `seguimiento_crt`; luego ponerla en la pestaña Agente → "Plantilla de seguimiento".
 - Monitor externo (p. ej. UptimeRobot sobre `masivowa.duckdns.org`) por si cae el VPS completo.
 - Posible mejora: transcripción de notas de voz (Anthropic no procesa audio).
 - Mucho envío en frío puede bajar la calidad del número en Meta: vigilar el WhatsApp Manager.

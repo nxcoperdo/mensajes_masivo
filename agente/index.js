@@ -63,6 +63,7 @@ for (const col of ['resenas INTEGER', 'calificacion REAL']) { try { db.exec(`ALT
 try { db.exec("ALTER TABLE agente_programados ADD COLUMN ciudad TEXT NOT NULL DEFAULT ''"); } catch { /* ya existe */ }
 try { db.exec("ALTER TABLE agente_programados ADD COLUMN tipo TEXT NOT NULL DEFAULT 'primer'"); } catch { /* ya existe */ }
 try { db.exec('ALTER TABLE agente_contactos ADD COLUMN sitio_web TEXT'); } catch { /* ya existe */ }
+try { db.exec('ALTER TABLE agente_config ADD COLUMN plantilla_reenvio TEXT'); } catch { /* ya existe */ }
 try { db.exec('ALTER TABLE agente_contactos ADD COLUMN reenviado INTEGER NOT NULL DEFAULT 0'); } catch { /* ya existe */ }
 
 const CAMPOS_CONTACTO = ['nombre', 'negocio', 'ciudad', 'necesidad', 'presupuesto', 'urgencia', 'estado', 'modo', 'resumen'];
@@ -111,7 +112,7 @@ const addChat = (clienteId, tel, rol, texto) =>
   db.prepare('INSERT INTO agente_chat (cliente_id, telefono, rol, texto) VALUES (?, ?, ?, ?)').run(clienteId, tel, rol, texto);
 
 function mensajesParaClaude(clienteId, tel) {
-  const filas = db.prepare('SELECT rol, texto FROM agente_chat WHERE cliente_id = ? AND telefono = ? ORDER BY id DESC LIMIT 40').all(clienteId, tel).reverse();
+  const filas = db.prepare("SELECT rol, texto FROM agente_chat WHERE cliente_id = ? AND telefono = ? AND rol != 'auto' ORDER BY id DESC LIMIT 40").all(clienteId, tel).reverse();
   const out = [];
   for (const m of filas) {
     const role = m.rol === 'user' ? 'user' : 'assistant';
@@ -198,9 +199,28 @@ async function ejecutarHerramienta(clienteId, cfg, tel, nombre, input) {
   }
 }
 
+// Respuestas automáticas de WhatsApp Business ("Gracias por comunicarte…", "En este momento no podemos responder…").
+// Un bot no debe conversar con otro bot: se registran aparte y el agente no contesta.
+const AUTO_FUERTE = /mensaje autom[aá]tico|respuesta autom[aá]tica|fuera del horario|horario (laboral|de atenci[oó]n)|en este momento (no|nos)|atendemos de|lo antes posible|tan pronto como|guard(a|ar|as|es) (nuestro|el) contacto|te atender[eé]mos|en (un )?(momento|minuto)s? te (atend|respond)|por favor (espera|aguarda)/i;
+const AUTO_SUAVE = /gracias por (comunicarte|contactarnos|escribir|tu mensaje|tu inter[eé]s|ponerte en contacto|elegirnos)|bienvenid[oa]|c[oó]mo podemos ayudarte|d[eé]janos saber|haznos saber|responder[eé]mos|no brindamos servicio/i;
+
+/** segundos = tiempo desde nuestro envío; los saludos "suaves" solo cuentan si llegan casi al instante. */
+export function esRespuestaAutomatica(texto, segundos = Infinity) {
+  const t = String(texto || '');
+  if (t.length < 25) return false;
+  if (AUTO_FUERTE.test(t)) return true;
+  return AUTO_SUAVE.test(t) && segundos < 300;
+}
+
 async function manejarEntrante(clienteId, cfg, tel, texto, nombrePerfil) {
   if (!getContacto(clienteId, tel)) crearContacto(clienteId, tel, nombrePerfil);
   let c = getContacto(clienteId, tel);
+  const segundos = c.primer_contacto ? (Date.now() - Date.parse(String(c.primer_contacto).replace(' ', 'T') + 'Z')) / 1000 : Infinity;
+  const hayConversacionReal = db.prepare("SELECT 1 FROM agente_chat WHERE cliente_id = ? AND telefono = ? AND rol = 'user' LIMIT 1").get(clienteId, tel);
+  if (!hayConversacionReal && c.modo === 'agente' && esRespuestaAutomatica(texto, segundos)) {
+    addChat(clienteId, tel, 'auto', texto);
+    return; // sigue en 'contactado': entra al reenvío del lunes si nadie responde de verdad
+  }
   if (c.estado === 'contactado' || c.estado === 'nuevo') actualizarContacto(clienteId, tel, { estado: 'conversando' });
   addChat(clienteId, tel, 'user', texto);
 
@@ -477,17 +497,30 @@ function puntajeLead(l) {
 async function reenviarSinRespuesta(clienteId, cfg, { limite }) {
   const cred = credencialesNumero(clienteId, cfg.phone_number_id);
   if (!cred) throw new Error('Elige un número válido para el agente');
-  const filas = db.prepare("SELECT * FROM agente_contactos WHERE cliente_id = ? AND estado = 'contactado' AND modo = 'agente' AND reenviado = 0 AND primer_contacto IS NOT NULL AND primer_contacto > datetime('now', '-4 days') ORDER BY id LIMIT ?")
+  // Nunca se repite la misma plantilla: hace falta una de seguimiento distinta y aprobada en Meta.
+  const plantilla = (cfg.plantilla_reenvio || '').trim();
+  if (!plantilla || plantilla === cfg.plantilla) {
+    throw new Error('Falta la plantilla de seguimiento (distinta a la de presentación). Configúrala en la pestaña Agente → "Plantilla de seguimiento" cuando Meta la apruebe.');
+  }
+  // Excluye números a los que el primer envío FALLÓ (sin WhatsApp) y prioriza a quienes ya leyeron el mensaje.
+  const filas = db.prepare(`
+    SELECT c.*, (SELECT MAX(CASE m.estado WHEN 'leido' THEN 3 WHEN 'entregado' THEN 2 ELSE 1 END)
+                 FROM mensajes m WHERE m.cliente_id = c.cliente_id AND m.telefono = c.telefono AND m.direccion = 'saliente' AND m.tipo = 'plantilla') AS prioridad
+    FROM agente_contactos c
+    WHERE c.cliente_id = ? AND c.estado = 'contactado' AND c.modo = 'agente' AND c.reenviado = 0
+      AND c.primer_contacto IS NOT NULL AND c.primer_contacto > datetime('now', '-4 days')
+      AND NOT EXISTS (SELECT 1 FROM mensajes m WHERE m.cliente_id = c.cliente_id AND m.telefono = c.telefono AND m.direccion = 'saliente' AND m.tipo = 'plantilla' AND m.estado = 'fallido')
+    ORDER BY prioridad DESC, c.id LIMIT ?`)
     .all(clienteId, Number(limite) || 200);
   let enviados = 0;
   const errores = [];
   for (const c of filas) {
-    const r = await sendTemplate({ to: c.telefono, template: cfg.plantilla, languageCode: cfg.idioma, parameters: [c.nombre || 'amigo'], ...cred });
+    const r = await sendTemplate({ to: c.telefono, template: plantilla, languageCode: cfg.idioma, parameters: [c.nombre || 'amigo'], ...cred });
     if (r.ok) {
       enviados++;
       db.prepare("UPDATE agente_contactos SET reenviado = 1, actualizado_en = datetime('now') WHERE id = ?").run(c.id);
       db.prepare(`INSERT INTO mensajes (telefono, direccion, tipo, texto, wa_message_id, estado, leido_por_agente, cliente_id, phone_number_id)
-                  VALUES (?, 'saliente', 'plantilla', ?, ?, 'enviado', 1, ?, ?)`).run(c.telefono, `[Plantilla ${cfg.plantilla}] reenvío: ${c.nombre}`, r.messageId || null, clienteId, cfg.phone_number_id);
+                  VALUES (?, 'saliente', 'plantilla', ?, ?, 'enviado', 1, ?, ?)`).run(c.telefono, `[Plantilla ${plantilla}] seguimiento: ${c.nombre}`, r.messageId || null, clienteId, cfg.phone_number_id);
       addChat(clienteId, c.telefono, 'assistant', `[Se reenvió la plantilla de presentación a ${c.nombre} (no había respondido)]`);
     } else errores.push({ telefono: c.telefono, error: r.error });
     await new Promise((res) => setTimeout(res, 1500));
@@ -577,7 +610,7 @@ export function crearRouterAgente() {
       if (b.phone_number_id && !credencialesNumero(id, b.phone_number_id)) return res.status(400).json({ error: 'Ese número no está en tu pool' });
       poner('phone_number_id', b.phone_number_id || null);
     }
-    for (const col of ['modelo', 'prompt_base', 'prompt_extra', 'plantilla', 'idioma', 'owner_phone', 'telegram_chat_id', 'crt_url', 'nota_iva']) {
+    for (const col of ['modelo', 'prompt_base', 'prompt_extra', 'plantilla', 'plantilla_reenvio', 'idioma', 'owner_phone', 'telegram_chat_id', 'crt_url', 'nota_iva']) {
       if (col in b) poner(col, b[col] === '' ? null : String(b[col]));
     }
     // Secretos: solo se actualizan si llegan no vacíos ("" = no cambiar; null explícito = borrar)

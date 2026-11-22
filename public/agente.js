@@ -30,6 +30,7 @@
     $('agModelo').value = cfg.modelo;
     $('agLimite').value = cfg.limite_diario;
     $('agPlantilla').value = cfg.plantilla || '';
+    $('agPlantillaReenvio').value = cfg.plantilla_reenvio || '';
     $('agIdioma').value = cfg.idioma || '';
     $('agCrtUrl').value = cfg.crt_url || '';
     $('agOwner').value = cfg.owner_phone || '';
@@ -60,6 +61,7 @@
       modelo: $('agModelo').value,
       limite_diario: $('agLimite').value,
       plantilla: $('agPlantilla').value,
+      plantilla_reenvio: $('agPlantillaReenvio').value,
       idioma: $('agIdioma').value,
       crt_url: $('agCrtUrl').value,
       owner_phone: $('agOwner').value,
@@ -115,8 +117,8 @@
     $('agChatCard').classList.remove('hidden');
     $('agChatTitulo').textContent = `${contacto?.nombre || tel} — ${contacto?.negocio || ''}`;
     $('agChatMensajes').innerHTML = mensajes.map((m) =>
-      `<div style="align-self:${m.rol === 'user' ? 'flex-start' : 'flex-end'};max-width:80%;padding:6px 10px;border-radius:8px;background:${m.rol === 'user' ? 'var(--color-surface-2, #eee)' : m.rol === 'nicolas' ? '#dbeafe' : '#dcfce7'};color:#111">
-        <small>${m.rol === 'user' ? 'Cliente' : m.rol === 'nicolas' ? 'Tú' : 'Agente'}</small><br>${esc(m.texto)}</div>`).join('');
+      `<div style="align-self:${m.rol === 'user' || m.rol === 'auto' ? 'flex-start' : 'flex-end'};max-width:80%;padding:6px 10px;border-radius:8px;background:${m.rol === 'user' ? 'var(--color-surface-2, #eee)' : m.rol === 'nicolas' ? '#dbeafe' : m.rol === 'auto' ? '#e5e7eb' : '#dcfce7'};color:#111">
+        <small>${m.rol === 'user' ? 'Cliente' : m.rol === 'nicolas' ? 'Tú' : m.rol === 'auto' ? 'Respuesta automática del negocio' : 'Agente'}</small><br>${esc(m.texto)}</div>`).join('');
     $('agChatMensajes').scrollTop = 1e9;
   }
 
