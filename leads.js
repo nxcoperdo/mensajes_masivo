@@ -35,7 +35,7 @@ export async function buscarNegocios({ query, ciudad }) {
  * Limpia el teléfono (reusa normalizePhone de whatsapp.js) y arma el
  * link de WhatsApp. Descarta el resultado si no hay teléfono utilizable.
  */
-function normalizarResultado({ nombre, direccion, rubro, telefono, sitio_web }) {
+function normalizarResultado({ nombre, direccion, rubro, telefono, sitio_web, resenas, calificacion }) {
   const tel = normalizePhone(telefono);
   if (!tel) return null;
   return {
@@ -44,6 +44,8 @@ function normalizarResultado({ nombre, direccion, rubro, telefono, sitio_web }) 
     rubro: rubro || null,
     telefono: tel,
     sitio_web: sitio_web || null,
+    resenas: Number.isFinite(resenas) ? resenas : null,
+    calificacion: Number.isFinite(calificacion) ? calificacion : null,
     link_whatsapp: `https://wa.me/${tel}`,
   };
 }
@@ -66,7 +68,8 @@ async function buscarGooglePlaces({ query, ciudad }) {
     throw new Error(`Google Places: ${searchData.status} ${searchData.error_message || ''}`.trim());
   }
 
-  const candidatos = (searchData.results || []).slice(0, maxResultados);
+  // Solo negocios que siguen operando (descarta cerrados temporal o definitivamente)
+  const candidatos = (searchData.results || []).filter((c) => !c.business_status || c.business_status === 'OPERATIONAL').slice(0, maxResultados);
 
   const detalles = await Promise.all(
     candidatos.map(async (c) => {
@@ -87,6 +90,8 @@ async function buscarGooglePlaces({ query, ciudad }) {
     rubro: (c.types || [])[0] || null,
     telefono: detalles[i].formatted_phone_number,
     sitio_web: detalles[i].website,
+    resenas: c.user_ratings_total,
+    calificacion: c.rating,
   }));
 }
 

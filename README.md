@@ -210,3 +210,10 @@ por su política de uso), `LEADS_RADIO_METROS` (radio de búsqueda
 alrededor del centro de la ciudad, default 5km) y
 `LEADS_MAX_RESULTADOS` (tope de resultados por búsqueda, default 20 —
 también limita cuántos Place Details se piden a Google por búsqueda).
+
+## Agente de ventas IA (Code Repair Tech)
+
+Este repo incluye un agente de ventas por WhatsApp con Claude (`agente/`), su pestaña "Agente" del panel
+(`public/agente.js`), envíos programados, reenvío, vigilancia 24/7 y alertas por Telegram.
+Toda la documentación (arquitectura, VPS, operación, campaña de Neiva, pendientes de seguridad) está en
+[`docs/AGENTE.md`](docs/AGENTE.md); los scripts del servidor en [`scripts/vps/`](scripts/vps/).

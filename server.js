@@ -35,6 +35,7 @@ import {
   contactosQueEntran,
 } from './planes.js';
 import { buscarNegocios } from './leads.js';
+import { crearRouterAgente, alRecibirMensaje, esDuenoAgente } from './agente/index.js';
 import {
   calcularResumen,
   calcularCotizacion,
@@ -268,8 +269,11 @@ app.get('/api/auth/yo', (req, res) => {
       nombre_negocio: cliente.nombre_negocio,
       estado: cliente.estado,
     },
+    agente: esDuenoAgente(cliente),
   });
 });
+
+app.use('/api/agente', crearRouterAgente());
 
 // Meta exige una "Valid OAuth Redirect URI" configurada en Facebook
 // Login for Business para el flujo de Embedded Signup, aunque el popup
@@ -2431,6 +2435,9 @@ function procesarWebhookWhatsApp(body) {
         if (msg.type === 'interactive' && msg.interactive?.type === 'nfm_reply') {
           guardarRespuestaFlow(cliente.id, telefono, msg);
         }
+
+        // Agente de ventas (solo actúa si el número es el elegido en la pestaña Agente)
+        alRecibirMensaje({ clienteIds: destinatarios, phoneNumberId, msg, texto: extraerTextoMensaje(msg), nombrePerfil: nombresPerfil[telefono] || null });
       }
 
       for (const estado of valor.statuses || []) {

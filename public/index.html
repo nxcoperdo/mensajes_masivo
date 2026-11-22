@@ -105,6 +105,10 @@
       Solicitudes
       <span id="solicitudesBadgeTab" class="tab-badge hidden">0</span>
     </button>
+    <button class="tab-btn hidden" data-tab="agente" id="tabBtnAgente">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="3" /><path d="M12 8V4M9 14h.01M15 14h.01" /></svg>
+      Agente
+    </button>
     <button class="tab-btn" data-tab="webhook">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" /></svg>
       Webhook
@@ -1332,6 +1336,88 @@
       </div>
     </section>
 
+    <!-- ===================== TAB: AGENTE (solo dueño del agente) ===================== -->
+    <section id="tab-agente" class="tab-panel">
+      <div class="card">
+        <div class="card-header">
+          <h2>Agente de ventas IA <span id="agEstadoBadge" class="badge badge-muted">Apagado</span></h2>
+          <div class="header-actions">
+            <button type="button" id="agToggle" class="btn btn-primary">Activar agente</button>
+          </div>
+        </div>
+        <p class="muted">Claude atiende las respuestas que lleguen al número elegido, califica al cliente y, cuando está listo para cerrar, te avisa y se calla. Mensajes en otros números no se tocan.</p>
+        <div id="agStats" class="muted"></div>
+        <div id="agMsg" class="result-box hidden"></div>
+      </div>
+
+      <div class="card">
+        <h2>Configuración</h2>
+        <div class="inline-form">
+          <div class="field"><label for="agNumero">Número del agente (de tu pool)</label><select id="agNumero"></select></div>
+          <div class="field"><label for="agModelo">Modelo</label>
+            <select id="agModelo"><option value="claude-sonnet-5-5">Sonnet 5.5 (vende mejor)</option><option value="claude-haiku-5-5">Haiku 5.5 (más barato)</option><option value="claude-opus-5-5">Opus 5.5</option></select></div>
+          <div class="field"><label for="agLimite">Límite diario de primeros contactos</label><input type="number" id="agLimite" min="0" max="500" /></div>
+        </div>
+        <div class="inline-form">
+          <div class="field"><label for="agPlantilla">Plantilla de presentación (Meta)</label><input type="text" id="agPlantilla" /></div>
+          <div class="field"><label for="agIdioma">Idioma plantilla</label><input type="text" id="agIdioma" /></div>
+          <div class="field"><label for="agCrtUrl">Link de Code Repair Tech</label><input type="text" id="agCrtUrl" placeholder="https://..." /></div>
+        </div>
+        <div class="inline-form">
+          <div class="field"><label for="agAnthropic">API key de Anthropic <span id="agAnthropicMask" class="muted"></span></label><input type="password" id="agAnthropic" placeholder="sk-ant-... (vacío = no cambiar)" autocomplete="off" /></div>
+          <div class="field"><label for="agOwner">Tu WhatsApp personal (comandos #leads, #tomar…)</label><input type="text" id="agOwner" placeholder="573001234567" /></div>
+        </div>
+        <div class="inline-form">
+          <div class="field"><label for="agTgToken">Token bot Telegram <span id="agTgMask" class="muted"></span></label><input type="password" id="agTgToken" placeholder="vacío = no cambiar" autocomplete="off" /></div>
+          <div class="field"><label for="agTgChat">Chat ID Telegram</label><input type="text" id="agTgChat" /></div>
+          <button type="button" id="agProbarAlertas" class="btn btn-outline">Probar alertas</button>
+        </div>
+        <div class="field"><label for="agIva">Nota sobre IVA (opcional)</label><input type="text" id="agIva" /></div>
+        <div class="field"><label for="agPromptExtra">Instrucciones adicionales al agente</label><textarea id="agPromptExtra" rows="3"></textarea></div>
+        <details>
+          <summary>Editar el conocimiento completo (precios, tono, reglas)</summary>
+          <p class="muted">Si lo dejas vacío se usa el texto por defecto. Para partir del actual, pulsa "Cargar por defecto".</p>
+          <textarea id="agPromptBase" rows="16" style="width:100%"></textarea>
+          <button type="button" id="agPromptDefault" class="btn btn-sm btn-outline">Cargar por defecto</button>
+        </details>
+        <p><button type="button" id="agGuardar" class="btn btn-primary">Guardar configuración</button></p>
+      </div>
+
+      <div class="card">
+        <h2>Prospección y primer contacto</h2>
+        <form id="agFormProspectar" class="inline-form">
+          <div class="field"><input type="text" id="agNicho" placeholder="Nicho (ej: restaurantes)" required /></div>
+          <div class="field"><input type="text" id="agCiudad" placeholder="Ciudad (ej: Neiva, Huila)" required /></div>
+          <button type="submit" class="btn btn-primary">Buscar negocios</button>
+        </form>
+        <div class="inline-form">
+          <div class="field"><input type="text" id="agNichoContactar" placeholder="Filtrar por nicho (opcional)" /></div>
+          <div class="field"><input type="number" id="agLimiteContactar" placeholder="Cantidad (por defecto: lo que quede hoy)" min="1" /></div>
+          <button type="button" id="agPrueba" class="btn btn-outline">Ver a quién escribiría (prueba)</button>
+          <button type="button" id="agContactar" class="btn btn-primary">Enviar presentación</button>
+        </div>
+        <div id="agProspResultado" class="result-box hidden"></div>
+        <div class="table-wrap"><table class="tabla"><thead><tr><th>Puntaje</th><th>Negocio</th><th>Rubro</th><th>Teléfono</th><th>Sitio web</th></tr></thead><tbody id="agTablaProspectos"></tbody></table></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h2>Clientes y conversaciones</h2>
+          <div class="header-actions">
+            <select id="agFiltroEstado"><option value="">Todos</option><option value="caliente">🔥 Calientes</option><option value="conversando">Conversando</option><option value="contactado">Contactado</option><option value="cerrado">Cerrado</option><option value="perdido">Perdido</option><option value="baja">Baja</option></select>
+            <button type="button" id="agRefrescar" class="btn btn-sm btn-outline">Actualizar</button>
+          </div>
+        </div>
+        <div class="table-wrap"><table class="tabla"><thead><tr><th>Cliente</th><th>Negocio</th><th>Estado</th><th>Modo</th><th>Resumen</th><th>Acciones</th></tr></thead><tbody id="agTablaContactos"></tbody></table></div>
+      </div>
+
+      <div class="card hidden" id="agChatCard">
+        <div class="card-header"><h2 id="agChatTitulo">Conversación</h2><button type="button" id="agChatCerrar" class="btn btn-sm btn-outline">Cerrar</button></div>
+        <div id="agChatMensajes" style="max-height:360px;overflow:auto;display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+        <form id="agChatForm" class="inline-form"><div class="field"><input type="text" id="agChatTexto" placeholder="Responder como tú (el agente se calla en este chat)" autocomplete="off" /></div><button type="submit" class="btn btn-primary">Enviar</button></form>
+      </div>
+    </section>
+
     <!-- ===================== TAB: WEBHOOK (ESTADOS Y CONVERSACIONES) ===================== -->
     <section id="tab-webhook" class="tab-panel">
       <details class="guia-seccion hidden" data-guia="webhook">
@@ -1491,5 +1577,6 @@
 
   <script>document.getElementById('footerYear').textContent = new Date().getFullYear();</script>
   <script src="/app.js"></script>
+  <script src="/agente.js"></script>
 </body>
 </html>
