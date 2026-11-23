@@ -201,8 +201,12 @@ async function ejecutarHerramienta(clienteId, cfg, tel, nombre, input) {
 
 // Respuestas automáticas de WhatsApp Business ("Gracias por comunicarte…", "En este momento no podemos responder…").
 // Un bot no debe conversar con otro bot: se registran aparte y el agente no contesta.
-const AUTO_FUERTE = /mensaje autom[aá]tico|respuesta autom[aá]tica|fuera del horario|horario (laboral|de atenci[oó]n)|en este momento (no|nos)|atendemos de|lo antes posible|tan pronto como|guard(a|ar|as|es) (nuestro|el) contacto|te atender[eé]mos|en (un )?(momento|minuto)s? te (atend|respond)|por favor (espera|aguarda)|no respondemos|solo (recibimos|atendemos)|despu[eé]s de las d|est[aá] cerrado|no estoy disponible|ahora mismo no|d[eé]jame (por favor )?(tu|los|el)|d[eé]janos (tu|tus|los|un)|d[eé]janos (tu )?mensaje|urgencias?|cat[aá]logo|ub[ií]canos|cont[aá]ctanos|nuestros? (servicios|horarios?)|llamar al|dir(ecci[oó]n)?:|es un honor atenderte/i;
+const AUTO_FUERTE = /mensaje autom[aá]tico|respuesta autom[aá]tica|fuera del horario|horario (laboral|de atenci[oó]n)|en este momento (no|nos)|atendemos de|lo antes posible|tan pronto como|guard(a|ar|as|es) (nuestro|el) contacto|te atender[eé]mos|en (un )?(momento|minuto)s? te (atend|respond)|por favor (espera|aguarda)|no respondemos|solo (recibimos|atendemos)|despu[eé]s de las \d|solo puedo ayudarte|asistente virtual|soy (un|el|la) (asistente|bot)|hay algo m[aá]s (en lo )?que|est[aá] cerrado|no estoy disponible|ahora mismo no|d[eé]jame (por favor )?(tu|los|el)|d[eé]janos (tu|tus|los|un)|d[eé]janos (tu )?mensaje|urgencias?|cat[aá]logo|ub[ií]canos|cont[aá]ctanos|nuestros? (servicios|horarios?)|llamar al|dir(ecci[oó]n)?:|es un honor atenderte/i;
 const AUTO_SUAVE = /gracias por (comunicarte|contactarnos|escribir|tu mensaje|tu inter[eé]s|ponerte en contacto|elegirnos)|bienvenid[oa]|c[oó]mo podemos ayudarte|d[eé]janos saber|haznos saber|responder[eé]mos|no brindamos servicio/i;
+
+// Un rechazo humano ("no estamos interesados") NUNCA se confunde con una respuesta automática: el agente lo registra y cierra amablemente.
+const RECHAZO = /no (estamos|estoy) interesad[oa]s?|no (nos|me) interesa|no,? gracias|no (deseo|queremos|necesitamos)|no (nos )?(escriban|molesten)|dejen de escribir/i;
+const SI_CUENTAME = /^\s*s[ií]\s*,?\s*cu[eé]ntame/i;
 
 /** segundos = tiempo desde nuestro envío; los saludos "suaves" solo cuentan si llegan casi al instante. */
 export function esRespuestaAutomatica(texto, segundos = Infinity) {
@@ -219,9 +223,14 @@ async function manejarEntrante(clienteId, cfg, tel, texto, nombrePerfil) {
   let c = getContacto(clienteId, tel);
   const segundos = c.primer_contacto ? (Date.now() - Date.parse(String(c.primer_contacto).replace(' ', 'T') + 'Z')) / 1000 : Infinity;
   const hayConversacionReal = db.prepare("SELECT 1 FROM agente_chat WHERE cliente_id = ? AND telefono = ? AND rol = 'user' LIMIT 1").get(clienteId, tel);
-  if (!hayConversacionReal && c.modo === 'agente' && esRespuestaAutomatica(texto, segundos)) {
+  if (!hayConversacionReal && c.modo === 'agente' && !RECHAZO.test(texto) && esRespuestaAutomatica(texto, segundos)) {
     addChat(clienteId, tel, 'auto', texto);
     return; // sigue en 'contactado': entra al reenvío del lunes si nadie responde de verdad
+  }
+  // Tocó "Sí, cuéntame" aunque antes hubiera dicho que no (p. ej. recibió dos plantillas): se reactiva y se atiende.
+  if (SI_CUENTAME.test(texto) && c.estado === 'perdido' && c.modo === 'agente') {
+    actualizarContacto(clienteId, tel, { estado: 'contactado' });
+    c = getContacto(clienteId, tel);
   }
   if (c.estado === 'contactado' || c.estado === 'nuevo') actualizarContacto(clienteId, tel, { estado: 'conversando' });
   addChat(clienteId, tel, 'user', texto);
